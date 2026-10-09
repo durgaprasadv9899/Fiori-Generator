@@ -1,0 +1,35 @@
+applications:
+  - name: fiori-generator-poc
+    memory: 1G
+    disk_quota: 2G
+    buildpacks:
+      - python_buildpack
+    # destination: lists BTP systems + resolves auth for "Browse BTP systems".
+    # connectivity: lets that browser reach on-premise systems via Cloud Connector.
+    services:
+      - evokesd4-destination-service
+      - fiori-generator-connectivity
+    # Start: make the vendored Linux cf/mbt executable, register the
+    # multiapps plugin (provides `cf deploy`) into an in-app plugin home, then
+    # run the generator. See scripts/vendor_cli.sh.
+    command: >
+      export PATH="$PWD/bin:$PATH";
+      chmod +x bin/* 2>/dev/null;
+      export CF_PLUGIN_HOME="$PWD/cf-plugins"; mkdir -p "$CF_PLUGIN_HOME";
+      (cf install-plugin -f bin/multiapps-plugin.linux64 > /tmp/plugin-install.log 2>&1
+      && echo "multiapps plugin registered") || echo "multiapps plugin NOT registered";
+      streamlit run app.py
+      --server.port=$PORT
+      --server.address=0.0.0.0
+      --server.headless=true
+      --server.enableCORS=false
+      --server.enableXsrfProtection=false
+    env:
+      STREAMLIT_SERVER_HEADLESS: "true"
+      # AI Core credentials — set with `cf set-env`, do NOT commit real values.
+      # AICORE_CLIENT_ID:     (set via cf set-env)
+      # AICORE_CLIENT_SECRET: (set via cf set-env)
+      # AICORE_AUTH_URL:      (set via cf set-env)
+      # AICORE_BASE_URL:      (set via cf set-env)
+      # AICORE_RESOURCE_GROUP: default
+      # APP_ACCESS_PASSWORD:   (set via cf set-env) — gates the public route

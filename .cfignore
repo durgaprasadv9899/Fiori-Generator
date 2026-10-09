@@ -1,0 +1,12 @@
+myenv/
+__pycache__/
+*.pyc
+.git/
+generated/
+*.mtar
+mta_archives/
+# Secrets — never upload. AI Core creds are provided via `cf set-env` instead.
+profiles/
+vcap_services.json
+.env
+.venv/

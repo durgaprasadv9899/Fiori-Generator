@@ -1,0 +1,15 @@
+# Core generative AI Hub SDK — provides the `gen_ai_hub` module the app imports.
+# [amazon] extra: boto3 for Anthropic Claude via the Bedrock-compatible API.
+# No [all] extra: only the native OpenAI + Amazon clients are used;
+# [all] adds ~500 MB of LangChain/Vertex/AWS packages that are never imported.
+# NOTE: if your working local env installed this from an SAP internal index
+# rather than public PyPI, pin the exact `name==version` from `pip freeze` there
+# and set PIP_EXTRA_INDEX_URL as a CF env var so the buildpack can fetch it.
+generative-ai-hub-sdk[amazon]
+sap-ai-sdk-core
+streamlit
+requests
+lxml
+pydantic
+python-dotenv
+pyyaml

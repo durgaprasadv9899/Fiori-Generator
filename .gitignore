@@ -1,0 +1,22 @@
+# Secrets — never commit (AI Core creds are set on CF with `cf set-env`)
+profiles/
+vcap_services.json
+.env
+*.env
+.streamlit/secrets.toml
+
+# Environments / caches
+myenv/
+.venv/
+venv/
+__pycache__/
+*.pyc
+
+# Vendored Linux CLIs for the CF container (45 MB) — re-fetch with scripts/vendor_cli.sh
+bin/
+
+# Build output
+generated/
+*.mtar
+mta_archives/
+node_modules/
