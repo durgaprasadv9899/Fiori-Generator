@@ -49,7 +49,7 @@ export default function DashboardPage() {
         <span className="ev-shard s1" /><span className="ev-shard s2" /><span className="ev-shard s3" /><span className="ev-shard s4" /><span className="ev-hero3__shine" />
         <div className="ev-hero3__text">
           <div className="ev-hero3__eyebrow">Evoke Fiori App Studio</div>
-          <h1>Create SAP Fiori applications with <span className="ev-ai-word"><Icon name="ai" className="ev-ai-word__spark" />AI</span></h1>
+          <h1>Create SAP Fiori applications with <span className="ev-ai-word">AI<Icon name="ai" className="ev-ai-word__spark" /></span></h1>
           <p>Describe the business requirement — the studio designs, builds, validates and deploys the application on SAP BTP.</p>
         </div>
         {canCreate && (
