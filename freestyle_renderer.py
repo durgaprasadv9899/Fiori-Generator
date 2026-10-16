@@ -470,8 +470,14 @@ class _Fs:
         act_handler = ".onDetailAction" if embedded else ".onAction"
         readonly = set(bp["form"]["readonly"]) | set(main["key"])
         # split layout: the selected record IS the row, so row actions go in its header too
-        obj_actions = [a for a in bp["actions"] if a["scope"] in ("object", "global")
-                       or (embedded and a["scope"] == "row")]
+        obj_actions, seen = [], set()
+        for a in bp["actions"]:
+            if a["scope"] in ("object", "global") or (embedded and a["scope"] == "row"):
+                # the same action may exist as row AND object action — one button in one header
+                sig = (a["kind"], a.get("operation") or a.get("field") or a["label"], a.get("value"))
+                if sig not in seen:
+                    seen.add(sig)
+                    obj_actions.append(a)
 
         actions = ""
         if caps["update"]:

@@ -498,6 +498,12 @@ def validate_against_model(files: Dict[str, str], model: Dict) -> Dict:
                     findings.append(Finding("error", "annotation-target", "annotations/annotations.xml",
                                             f"Entity set '{es_name}' in target '{target}' does not exist."))
                 continue
+            if "(" in head:                   # bound action overload: ns.action(ns.Type)
+                op_name = head.split("(")[0].split(".")[-1]
+                if op_name not in {o["name"] for o in model.get("operations", [])}:
+                    findings.append(Finding("error", "annotation-target", "annotations/annotations.xml",
+                                            f"Operation '{op_name}' in target '{target}' does not exist."))
+                continue
             tname = head.split(".")[-1]
             es = types.get(tname)
             if not es:

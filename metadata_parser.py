@@ -385,6 +385,31 @@ def _params(el) -> List[Dict]:
     return out
 
 
+def _evoke_action_facts(el) -> Dict:
+    """Studio-generated (standalone CAP) services describe their workflow on the action:
+    <Annotation Term="Evoke.StateGuard"> {Field, Values[]} = the states the action is valid
+    in, plus Common.Label. Read into op["state_guard"] / op["label"]."""
+    out: Dict = {}
+    for ann in el:
+        if _localname(ann.tag) != "Annotation":
+            continue
+        term = ann.attrib.get("Term", "")
+        if term.endswith("Label") and ann.attrib.get("String"):
+            out["label"] = ann.attrib["String"]
+        elif term.endswith("StateGuard"):
+            field, values = "", []
+            for pv in ann.iter():
+                if _localname(pv.tag) != "PropertyValue":
+                    continue
+                if pv.attrib.get("Property") == "Field":
+                    field = pv.attrib.get("String", "")
+                elif pv.attrib.get("Property") == "Values":
+                    values = [v.text or "" for v in pv.iter() if _localname(v.tag) == "String"]
+            if field and values:
+                out["state_guard"] = {"field": field, "values": values}
+    return out
+
+
 def _parse_operations(root, version: str, namespace: str) -> List[Dict]:
     """Actions / functions the service exposes.
 
@@ -415,13 +440,15 @@ def _parse_operations(root, version: str, namespace: str) -> List[Dict]:
                                   .rstrip(")").split(".")[-1])
                     binding_param = params[0]["name"]
                     params = params[1:]
-                ops.append({
+                op = {
                     "name": name, "kind": kind.lower(), "bound_type": bound_type,
                     "entity_set": "", "http_method": "POST" if kind == "Action" else "GET",
                     "label": _humanize(name), "parameters": params,
                     "import_name": imports.get(name, ""), "namespace": namespace,
                     "binding_param": binding_param,
-                })
+                }
+                op.update(_evoke_action_facts(el))
+                ops.append(op)
     else:
         for el in _find_all(root, "FunctionImport"):
             name = el.attrib.get("Name")

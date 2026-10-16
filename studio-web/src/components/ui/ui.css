@@ -1,0 +1,67 @@
+/* Shared component styles. Theme-aware: only UI5 theme variables + a few brand tokens. */
+.ev-ph { display: flex; align-items: flex-end; justify-content: space-between; gap: 1rem; padding: 1.5rem 2rem 1rem; flex-wrap: wrap; }
+.ev-ph--hero { background: var(--ev-grad); color: #fff; border-radius: 0 0 22px 22px; padding: 2rem 2rem 1.75rem; margin-bottom: .5rem; box-shadow: var(--ev-shadow); }
+.ev-ph--hero .ev-ph__title, .ev-ph--hero .ev-ph__sub, .ev-ph--hero .ev-ph__kicker { color: #fff !important; }
+.ev-ph__kicker { font-size: .72rem; font-weight: 700; letter-spacing: .09em; text-transform: uppercase; color: var(--sapBrandColor); margin-bottom: .25rem; }
+.ev-ph__title { font-size: 1.6rem !important; }
+.ev-ph__sub { color: var(--sapContent_LabelColor); margin-top: .35rem; max-width: 70ch; line-height: 1.45; }
+.ev-ph__actions { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; }
+
+.ev-card { background: var(--sapTile_Background, var(--sapGroup_ContentBackground)); border: 1px solid var(--sapTile_BorderColor, var(--sapGroup_ContentBorderColor));
+  border-radius: var(--ev-radius); box-shadow: var(--ev-shadow); overflow: hidden; transition: box-shadow .2s; }
+.ev-card--click { cursor: pointer; }
+.ev-card--click:hover { box-shadow: var(--ev-shadow-hover); }
+.ev-card__head { display: flex; align-items: center; gap: .75rem; padding: .9rem 1.1rem .4rem; }
+.ev-card__icon { width: 2.1rem; height: 2.1rem; border-radius: 10px; display: grid; place-items: center;
+  background: color-mix(in srgb, var(--sapBrandColor) 12%, transparent); color: var(--sapBrandColor); }
+.ev-card__titles { flex: 1; min-width: 0; }
+.ev-card__title { font-weight: 700; font-size: .98rem; }
+.ev-card__sub { font-size: .8rem; color: var(--sapContent_LabelColor); margin-top: .1rem; }
+.ev-card__actions { display: flex; gap: .35rem; }
+.ev-card__body { padding: .6rem 1.1rem 1.1rem; }
+
+.ev-kpi { position: relative; overflow: hidden; border-radius: var(--ev-radius); padding: 1rem 1.15rem; background: var(--sapTile_Background);
+  border: 1px solid var(--sapTile_BorderColor); box-shadow: var(--ev-shadow); }
+.ev-kpi::before { content: ""; position: absolute; inset: 0 auto 0 0; width: 4px; background: var(--ev-kpi-accent); }
+.ev-kpi--brand { --ev-kpi-accent: var(--sapBrandColor); }
+.ev-kpi--good { --ev-kpi-accent: var(--sapPositiveColor); }
+.ev-kpi--warn { --ev-kpi-accent: var(--sapCriticalColor); }
+.ev-kpi--bad { --ev-kpi-accent: var(--sapNegativeColor); }
+.ev-kpi--neutral { --ev-kpi-accent: var(--sapNeutralColor); }
+.ev-kpi__top { display: flex; justify-content: space-between; align-items: center; color: var(--sapContent_LabelColor); font-size: .8rem; font-weight: 600; }
+.ev-kpi__icon { color: var(--ev-kpi-accent); }
+.ev-kpi__value { font-size: 2rem; font-weight: 800; margin-top: .35rem; letter-spacing: -.02em; }
+.ev-kpi__hint { font-size: .76rem; color: var(--sapContent_LabelColor); margin-top: .15rem; }
+
+.ev-badge { display: inline-flex; align-items: center; gap: .3rem; font-size: .74rem; font-weight: 700; padding: .18rem .55rem; border-radius: 999px; white-space: nowrap; }
+.ev-badge ui5-icon { width: .8rem; height: .8rem; color: inherit; }
+.ev-badge--good { background: color-mix(in srgb, var(--sapPositiveColor) 14%, transparent); color: var(--sapPositiveTextColor, var(--sapPositiveColor)); }
+.ev-badge--warn { background: color-mix(in srgb, var(--sapCriticalColor) 16%, transparent); color: var(--sapCriticalTextColor, var(--sapCriticalColor)); }
+.ev-badge--bad { background: color-mix(in srgb, var(--sapNegativeColor) 14%, transparent); color: var(--sapNegativeTextColor, var(--sapNegativeColor)); }
+.ev-badge--info { background: color-mix(in srgb, var(--sapInformativeColor) 14%, transparent); color: var(--sapInformativeTextColor, var(--sapInformativeColor)); }
+.ev-badge--brand { background: color-mix(in srgb, var(--sapBrandColor) 14%, transparent); color: var(--sapBrandColor); }
+.ev-badge--neutral { background: color-mix(in srgb, var(--sapNeutralColor) 14%, transparent); color: var(--sapContent_LabelColor); }
+
+.ev-empty { display: flex; flex-direction: column; align-items: center; text-align: center; gap: .4rem; padding: 2.5rem 1rem; }
+.ev-empty__icon { width: 3.4rem; height: 3.4rem; border-radius: 18px; display: grid; place-items: center; margin-bottom: .4rem;
+  background: color-mix(in srgb, var(--sapBrandColor) 10%, transparent); color: var(--sapBrandColor); }
+.ev-empty__icon ui5-icon { width: 1.6rem; height: 1.6rem; }
+.ev-empty__text { max-width: 46ch; color: var(--sapContent_LabelColor); }
+.ev-empty__action { margin-top: .6rem; }
+
+.ev-skel { background: linear-gradient(90deg, var(--sapField_Background) 25%, var(--sapList_HeaderBackground) 50%, var(--sapField_Background) 75%);
+  background-size: 200% 100%; animation: ev-shimmer 1.2s infinite; }
+@keyframes ev-shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
+
+.ev-tl { display: flex; flex-direction: column; gap: .35rem; }
+.ev-tl__title { display: flex; align-items: center; gap: .5rem; font-weight: 700; margin-bottom: .25rem; }
+.ev-tl__item { display: flex; gap: .6rem; align-items: flex-start; font-size: .86rem; line-height: 1.35; }
+.ev-tl__dot { width: 1.1rem; height: 1.1rem; flex: none; display: grid; place-items: center; color: var(--sapPositiveColor); margin-top: .05rem; }
+.ev-tl__dot ui5-icon { width: .85rem; height: .85rem; color: var(--sapPositiveColor); }
+.ev-tl__item.is-live .ev-tl__msg { color: var(--sapBrandColor); font-weight: 600; }
+.ev-pulse { width: .6rem; height: .6rem; border-radius: 50%; background: var(--sapBrandColor); animation: ev-pulse 1.1s ease-in-out infinite; }
+@keyframes ev-pulse { 0%, 100% { transform: scale(.7); opacity: .6; } 50% { transform: scale(1.15); opacity: 1; } }
+
+.ev-grid { display: grid; gap: var(--ev-gap); }
+.ev-content { padding: 0 2rem 2rem; }
+@media (max-width: 700px) { .ev-ph, .ev-content { padding-left: 1rem; padding-right: 1rem; } }

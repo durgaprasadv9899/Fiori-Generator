@@ -1,0 +1,105 @@
+{
+  "xsappname": "evoke-fiori-studio",
+  "tenant-mode": "dedicated",
+  "scopes": [
+    {
+      "name": "$XSAPPNAME.Viewer",
+      "description": "Read-only access to studio projects"
+    },
+    {
+      "name": "$XSAPPNAME.Developer",
+      "description": "Create, generate and deploy apps to development"
+    },
+    {
+      "name": "$XSAPPNAME.Reviewer",
+      "description": "Approve or reject production releases"
+    },
+    {
+      "name": "$XSAPPNAME.ReleaseManager",
+      "description": "Deploy approved versions to test and production"
+    },
+    {
+      "name": "$XSAPPNAME.Admin",
+      "description": "Studio administration"
+    }
+  ],
+  "role-templates": [
+    {
+      "name": "Viewer",
+      "description": "Read-only access to studio projects",
+      "scope-references": [
+        "$XSAPPNAME.Viewer"
+      ]
+    },
+    {
+      "name": "Developer",
+      "description": "Create, generate and deploy apps to development",
+      "scope-references": [
+        "$XSAPPNAME.Developer"
+      ]
+    },
+    {
+      "name": "Reviewer",
+      "description": "Approve or reject production releases",
+      "scope-references": [
+        "$XSAPPNAME.Reviewer"
+      ]
+    },
+    {
+      "name": "ReleaseManager",
+      "description": "Deploy approved versions to test and production",
+      "scope-references": [
+        "$XSAPPNAME.ReleaseManager"
+      ]
+    },
+    {
+      "name": "Admin",
+      "description": "Studio administration",
+      "scope-references": [
+        "$XSAPPNAME.Admin"
+      ]
+    }
+  ],
+  "role-collections": [
+    {
+      "name": "Evoke_Studio_Viewer",
+      "description": "Read-only access to studio projects",
+      "role-template-references": [
+        "$XSAPPNAME.Viewer"
+      ]
+    },
+    {
+      "name": "Evoke_Studio_Developer",
+      "description": "Create, generate and deploy apps to development",
+      "role-template-references": [
+        "$XSAPPNAME.Developer"
+      ]
+    },
+    {
+      "name": "Evoke_Studio_Reviewer",
+      "description": "Approve or reject production releases",
+      "role-template-references": [
+        "$XSAPPNAME.Reviewer"
+      ]
+    },
+    {
+      "name": "Evoke_Studio_ReleaseManager",
+      "description": "Deploy approved versions to test and production",
+      "role-template-references": [
+        "$XSAPPNAME.ReleaseManager"
+      ]
+    },
+    {
+      "name": "Evoke_Studio_Admin",
+      "description": "Studio administration",
+      "role-template-references": [
+        "$XSAPPNAME.Admin"
+      ]
+    }
+  ],
+  "oauth2-configuration": {
+    "redirect-uris": [
+      "https://*.cfapps.us10-001.hana.ondemand.com/**"
+    ]
+  }
+}

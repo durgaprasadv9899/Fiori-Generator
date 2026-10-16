@@ -1,0 +1,46 @@
+.ev-modal { position: fixed; inset: 0; z-index: 400; display: grid; place-items: center; padding: 1rem;
+  background: color-mix(in srgb, #0b1220 45%, transparent); backdrop-filter: blur(3px); }
+.ev-modal__card { max-width: 100%; max-height: calc(100vh - 2rem); display: flex; flex-direction: column; overflow: hidden;
+  background: var(--sapGroup_ContentBackground); color: var(--sapTextColor); border-radius: 18px;
+  border: 1px solid var(--sapGroup_ContentBorderColor); box-shadow: 0 24px 64px rgba(0, 0, 0, .28); }
+.ev-modal__card.is-danger { border-top: 4px solid var(--sapNegativeColor); }
+.ev-modal__head { display: flex; align-items: center; gap: .7rem; padding: 1rem 1.2rem .6rem; }
+.ev-modal__icon { width: 2.2rem; height: 2.2rem; border-radius: 11px; display: grid; place-items: center;
+  background: color-mix(in srgb, var(--sapBrandColor) 12%, transparent); color: var(--sapBrandColor); }
+.ev-modal__card.is-danger .ev-modal__icon { background: color-mix(in srgb, var(--sapNegativeColor) 12%, transparent); color: var(--sapNegativeColor); }
+.ev-modal__title { flex: 1; font-weight: 800; font-size: 1.08rem; }
+.ev-modal__body { padding: .2rem 1.2rem 1rem; overflow: auto; display: flex; flex-direction: column; gap: .7rem; }
+.ev-modal__foot { display: flex; justify-content: flex-end; gap: .5rem; padding: .8rem 1.2rem; border-top: 1px solid var(--sapGroup_ContentBorderColor);
+  background: color-mix(in srgb, var(--sapList_HeaderBackground) 60%, transparent); }
+.ev-modal__lead { margin: 0; line-height: 1.5; color: var(--sapTextColor); }
+.ev-field { display: flex; flex-direction: column; gap: .3rem; font-size: .82rem; font-weight: 600; color: var(--sapContent_LabelColor); }
+.ev-delstats { display: flex; gap: .5rem; flex-wrap: wrap; }
+.ev-delstats span { padding: .3rem .65rem; border-radius: 9px; font-size: .82rem; background: var(--sapList_HeaderBackground); }
+.ev-delcf { display: flex; flex-direction: column; gap: .25rem; padding: .75rem .9rem; border-radius: 12px;
+  border: 1px solid color-mix(in srgb, var(--sapCriticalColor) 45%, transparent); background: color-mix(in srgb, var(--sapCriticalColor) 8%, transparent); }
+.ev-delcf__t { display: flex; align-items: center; gap: .4rem; font-weight: 700; }
+.ev-delcf__log { padding: .6rem .8rem; border-radius: 10px; background: var(--sapList_HeaderBackground); }
+.ev-delnames { display: flex; flex-wrap: wrap; gap: .35rem; }
+
+/* card overflow menu + selection */
+.ev-pcard__menu { position: absolute; top: .55rem; right: .55rem; z-index: 2; }
+.ev-kebab { width: 2rem; height: 2rem; border-radius: 9px; border: 0; background: transparent; color: var(--sapContent_IconColor);
+  display: grid; place-items: center; cursor: pointer; opacity: .75; transition: background .15s, opacity .15s; }
+.ev-kebab:hover { background: var(--sapList_Hover_Background); opacity: 1; }
+.ev-menu { display: flex; flex-direction: column; padding: .3rem; }
+.ev-menu button { display: flex; align-items: center; gap: .6rem; padding: .5rem .7rem; border: 0; border-radius: 8px; background: none;
+  color: var(--sapTextColor); font: inherit; font-size: .86rem; text-align: left; cursor: pointer; }
+.ev-menu button:hover { background: var(--sapList_Hover_Background); }
+.ev-menu button.is-danger { color: var(--sapNegativeTextColor, var(--sapNegativeColor)); }
+.ev-menu hr { border: 0; border-top: 1px solid var(--sapGroup_ContentBorderColor); margin: .25rem 0; }
+.ev-pcard__check { position: absolute; top: .6rem; left: .6rem; z-index: 2; }
+.ev-pcard.is-selected { outline: 2px solid var(--sapBrandColor); outline-offset: -2px; }
+.ev-selbar { position: sticky; bottom: 1rem; margin: 1rem auto 0; width: fit-content; max-width: 100%; display: flex; align-items: center; gap: .6rem;
+  padding: .55rem .7rem .55rem 1rem; border-radius: 14px; background: var(--sapGroup_ContentBackground);
+  border: 1px solid var(--sapGroup_ContentBorderColor); box-shadow: 0 12px 36px rgba(0, 0, 0, .2); z-index: 5; }
+.ev-danger-zone { border: 1px solid color-mix(in srgb, var(--sapNegativeColor) 45%, transparent) !important; }
+.ev-pgrid .ev-pcard { overflow: visible; }
+.ev-pgrid .ev-pcard .ev-pcard__band { border-radius: 16px 16px 0 0; }
+.ev-pgrid .ev-pcard:has(.ev-dd__panel) { z-index: 20; }
+.ev-dtable tr.is-sel td { background: color-mix(in srgb, var(--sapBrandColor) 9%, transparent); }
+.ev-pcard__titles { padding-right: 1.6rem; }

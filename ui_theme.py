@@ -287,8 +287,8 @@ def login_hero(logo_uri: str) -> str:
             f'<p>Sign in to design, generate and deploy SAP Fiori apps.</p></div>')
 
 
-STEPS = [("Connect", "OData service"), ("Describe", "What the app should do"),
-         ("Review", "Design & coverage"), ("Build", "Files & quality"), ("Deploy", "SAP BTP")]
+STEPS = [("Start", "SAP service or new app"), ("Describe", "What the app should do"),
+         ("Review", "Design & preview"), ("Build", "Generate & validate"), ("Deploy", "Approve & deploy")]
 
 
 def stepper(current: int, done: List[bool]) -> str:

@@ -87,7 +87,7 @@ def _is_auxiliary(es: Dict) -> bool:
     """Text/value-help/technical sets — poor choices for a main entity."""
     n = es["name"]
     return bool(re.search(r"(_?Text$|Texts$|VH$|ValueHelp|_VH_|^I_|^SAP__|Set_?Text|"
-                          r"_by_|Summar|_Extended$|^Alphabetical|^Current_|Demographic)", n))
+                          r"_by_|Summar|_Extended$|^Alphabetical|^Current_|Demographic|History$)", n))
 
 
 def _to_many_navs(model: Dict, es: Dict) -> List[Tuple[Dict, Dict]]:
@@ -456,6 +456,14 @@ _KNOWN_STATE_RULES = [
 
 def _enabled_when(a: Dict, op: Optional[Dict], props: Dict, note, label: str) -> Dict:
     ew = a.get("enabled_when") or {}
+    # A service that declares the action's valid states (studio-generated CAP workflow)
+    # is authoritative: the backend rejects the action in any other state.
+    sg = (op or {}).get("state_guard") or {}
+    if sg.get("field") in props and sg.get("values"):
+        if ew and (ew.get("field") != sg["field"] or sorted(map(str, ew.get("values") or [])) != sorted(sg["values"])):
+            note(f"Action '{label}': availability set to the service workflow rule "
+                 f"{sg['field']} = {'/'.join(sg['values'])}.")
+        return {"field": sg["field"], "values": list(sg["values"])}
     # Known SAP rules win over the AI's guess: a wrong guard either disables the
     # action forever (e.g. TotalBlockStatus='B', which no order has) or lets it
     # run in a state where the backend dumps.

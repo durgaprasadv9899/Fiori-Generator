@@ -1,0 +1,48 @@
+/* Evoke Fiori App Studio — small additions on top of SAP Horizon */
+
+.evHeader .evLogo { margin-left: .25rem; margin-right: .5rem; border-radius: 6px; }
+.evHeader .evAppTitle { font-weight: 700; }
+.evAiStatus { margin-right: .5rem; }
+
+.evMuted { color: var(--sapContent_LabelColor); }
+.evSmall { font-size: var(--sapFontSmallSize); }
+.evStrong { font-weight: 600; }
+.evMono, .evCode { font-family: var(--sapContent_MonospaceFontFamily, "72Mono", Consolas, monospace); }
+.evCode textarea, .evCode.sapMText { font-family: var(--sapContent_MonospaceFontFamily, "72Mono", Consolas, monospace);
+    font-size: .8125rem; line-height: 1.35; }
+
+.evStep { max-width: 82rem; padding: .25rem .25rem 1rem; }
+
+/* cards */
+.evCard.sapMPanel { border-radius: var(--sapElement_BorderCornerRadius, .75rem); overflow: hidden;
+    box-shadow: var(--sapContent_Shadow0); border: 1px solid var(--sapGroup_ContentBorderColor); }
+.evCard.sapMPanel > .sapMPanelContent { padding: .75rem 1rem; }
+.evInner.sapMList { background: transparent; }
+
+/* KPI tiles */
+.evKpi { min-width: 9rem; margin: 0 .75rem .5rem 0; padding: .625rem .875rem; border-radius: .75rem;
+    background: var(--sapTile_Background); border: 1px solid var(--sapTile_BorderColor);
+    box-shadow: var(--sapContent_Shadow0); }
+.evKpi .evKpiNumber .sapMObjectNumberText { font-size: 1.75rem; font-weight: 700; }
+.evKpi .evKpiText { font-size: 1.05rem; font-weight: 600; margin-top: .25rem; }
+
+/* job progress */
+.evJobPanel { padding: .75rem 1rem; border-radius: .75rem; max-width: 60rem;
+    background: var(--sapInformationBackgroundColor); border: 1px solid var(--sapInformationBorderColor); }
+.evJobMsg { white-space: pre-line; font-size: var(--sapFontSmallSize); color: var(--sapContent_LabelColor);
+    margin-top: .25rem; }
+
+/* step tabs: a little more air */
+.evSteps .sapMITBHead { padding-left: .5rem; }
+.evInnerTabs .sapMITBHead { padding-left: 0; }
+
+/* app preview */
+.evPreviewHost { width: 100%; }
+.evPreview { width: 100%; height: 640px; border: 1px solid var(--sapGroup_ContentBorderColor);
+    border-radius: .75rem; background: #fff; display: block; }
+@media (max-width: 600px) { .evPreview { height: 520px; } }
+
+/* narrow screens: keep the header to logo, jobs and user */
+@media (max-width: 600px) {
+    .evHeader .evAppTitle, .evHeader .evAiStatus { display: none; }
+}

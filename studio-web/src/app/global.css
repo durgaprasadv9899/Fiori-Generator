@@ -1,0 +1,22 @@
+/* Global layout + design tokens. Colours come from the UI5 theme (Horizon light/dark) via CSS vars. */
+html, body, #root { height: 100%; margin: 0; }
+body {
+  font-family: var(--sapFontFamily);
+  background: var(--sapBackgroundColor);
+  color: var(--sapTextColor);
+}
+:root {
+  --ev-radius: 14px;
+  --ev-gap: 1rem;
+  --ev-brand: #6c3df4;
+  --ev-brand-2: #0070f2;
+  --ev-grad: linear-gradient(135deg, #2b1a6f 0%, #5a2bd8 45%, #0070f2 100%);
+  --ev-shadow: 0 1px 2px rgba(16, 24, 40, .06), 0 4px 16px rgba(16, 24, 40, .06);
+  --ev-shadow-hover: 0 6px 28px rgba(16, 24, 40, .14);
+}
+.ev-shell { display: flex; flex-direction: column; height: 100vh; }
+.ev-body { display: flex; flex: 1; min-height: 0; }
+.ev-sidenav { height: 100%; }
+.ev-main { flex: 1; min-width: 0; overflow: auto; }
+.ev-page { min-height: 100%; }
+.ev-page-loading { display: flex; justify-content: center; padding: 4rem; }

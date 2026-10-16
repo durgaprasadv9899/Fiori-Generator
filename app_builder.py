@@ -42,6 +42,7 @@ class BuildResult:
     fixes: List[str]
     spec: AppSpec
     translation_note: str = ""
+    kind: str = "sap"                 # "sap" (existing OData service) | "standalone" (generated CAP backend)
 
 
 def load_model(edmx: str) -> Dict:
@@ -73,13 +74,36 @@ def load_app_model(edmx: str, service_url: str = "", extra_services: Optional[Li
 def design(requirement: str, edmx: str, ai_fn: Optional[Callable] = None,
            floorplan: str = "", style: Optional[Dict] = None,
            progress: Optional[Callable[[str], None]] = None, *, service_url: str = "",
-           extra_services: Optional[List[Dict]] = None) -> Dict:
+           extra_services: Optional[List[Dict]] = None, standalone: Optional[Dict] = None, **ai_options) -> Dict:
     """Design step: requirement analysis -> blueprint -> repair -> coverage.
     Returns {"model", "blueprint", "notes", "source", "spec", "coverage", "steps"}."""
     import ai_designer
+    if standalone:
+        return design_standalone(requirement, standalone, ai_fn, floorplan, style, progress=progress, **ai_options)
     model = load_app_model(edmx, service_url, extra_services)
-    res = ai_designer.design(requirement, model, ai_fn, floorplan, style, progress=progress)
+    res = ai_designer.design(requirement, model, ai_fn, floorplan, style, progress=progress, **ai_options)
     return dict(res, model=model)
+
+
+def design_standalone(requirement: str, domain: Dict, ai_fn: Optional[Callable] = None, floorplan: str = "",
+                      style: Optional[Dict] = None, progress: Optional[Callable[[str], None]] = None,
+                      **ai_options) -> Dict:
+    """UI design for a new app with a generated backend (domain from standalone.design_domain).
+    Returns the same dict as design() plus "edmx" / "service_url" of the generated service."""
+    import ai_designer
+    import standalone as sa
+    domain, _ = sa.validate_domain(domain)
+    edmx = sa.to_edmx(domain)
+    model = load_model(edmx)
+    if ai_fn:
+        res = ai_designer.design(requirement + sa.design_hints(domain), model, ai_fn, floorplan, style,
+                                 progress=progress, **ai_options)
+    else:
+        bp, notes = bpm.validate(dict(sa.default_blueprint(domain, model, requirement, floorplan),
+                                      **({"style": style} if style else {})), model, requirement)
+        res = {"blueprint": bp, "notes": notes, "source": "rules", "spec": None, "coverage": [],
+               "steps": [{"step": "design", "ok": True, "seconds": 0, "detail": "rule-based design for the generated backend"}]}
+    return dict(res, model=model, edmx=edmx, service_url=sa.service_path(domain))
 
 
 def refine(blueprint: Dict, instruction: str, requirement: str, edmx: str, ai_fn: Callable,
@@ -220,7 +244,17 @@ def build(*, edmx: str, requirement: str, app_id: str, service_url: str,
           on_premise: bool = False, theme: str = "sap_horizon",
           translate_texts: bool = True, style: Optional[Dict] = None,
           logo_data_uri: str = "", design_spec: Optional[Dict] = None,
-          coverage: Optional[List] = None, extra_services: Optional[List[Dict]] = None) -> BuildResult:
+          coverage: Optional[List] = None, extra_services: Optional[List[Dict]] = None,
+          standalone: Optional[Dict] = None, standalone_db: str = "sqlite") -> BuildResult:
+    """Generate the project. With `standalone` (a domain from standalone.design_domain) the app
+    gets its own CAP backend: edmx / service_url default to the domain's synthesised service."""
+    sa_notes: List[str] = []
+    if standalone:
+        import standalone as sa
+        standalone, sa_notes = sa.validate_domain(standalone)
+        edmx = edmx or sa.to_edmx(standalone)
+        service_url = service_url or sa.service_path(standalone)
+        extra_services = None
     if not re.match(r"^[a-zA-Z][\w]*(\.[a-zA-Z][\w]*)+$", app_id or ""):
         raise ValueError(f"App ID '{app_id}' must be a dotted namespace like com.company.app.")
     if not (service_url or "").strip():
@@ -229,6 +263,9 @@ def build(*, edmx: str, requirement: str, app_id: str, service_url: str,
     import multi_service as ms
     extra_services = [s for s in (extra_services or []) if (s.get("edmx") or "").strip()]
     model = load_app_model(edmx, service_url, extra_services)
+    if blueprint is None and standalone:
+        import standalone as sa
+        blueprint = sa.default_blueprint(standalone, model, requirement, floorplan)
     if blueprint is None:
         bp, notes, source = bpm.design(requirement, model, ai_fn, floorplan, style)
     else:
@@ -308,13 +345,45 @@ def build(*, edmx: str, requirement: str, app_id: str, service_url: str,
         services=[{"alias": s["alias"], "title": s["title"], "service_url": s["service_url"],
                    "metadata": f"localService/{s['alias']}/metadata.xml"} for s in extra_info])
 
+    if standalone:
+        files = _standalone_files(files, standalone, app_id, standalone_db)
+        notes.extend(sa_notes)
+
     # Quality gate (+ model-aware checks)
     qa = qv.validate_and_autofix(files)
     files = qa["files"]
     report = qv.merge_reports(qa["report_after"], qv.validate_against_model(files, model))
     return BuildResult(model=model, blueprint=bp, notes=notes, source=source, files=files,
                        quality=report, fixes=qa["fixes_applied"], spec=spec,
-                       translation_note=tr_note)
+                       translation_note=tr_note, kind="standalone" if standalone else "sap")
+
+
+def _standalone_files(files: Dict[str, str], domain: Dict, app_id: str, db: str) -> Dict[str, str]:
+    """Own CAP backend instead of a remote SAP system: backend/ sources, an MTA with the
+    service module (+ HDI deployer for HANA), approuter route /odata -> srv-api, roles."""
+    import standalone as sa
+    import app_import
+    files = dict(files)
+    for k in ("destinations.stub.json", "deploy.mtaext.example", ".env.example"):
+        files.pop(k, None)
+    files.update(sa.cap_files(domain, app_id, db=db))
+    files.update(sa.mock_data(domain))
+    files["mta.yaml"] = sa.mta_yaml(domain, app_id, db=db)
+    files["xs-app.json"] = sa.xs_app_json()
+    files["xs-security.json"] = sa.xs_security(domain, app_id)
+    files["ui5-cap.yaml"] = sa.ui5_cap_yaml(app_id)
+    pkg = json.loads(files["package.json"])
+    pkg.setdefault("scripts", {})["start-cap"] = "ui5 serve --config ui5-cap.yaml --open index.html"
+    files["package.json"] = json.dumps(pkg, indent=2)
+    files[".gitignore"] = "node_modules/\nbackend/node_modules/\nbackend/gen/\nmta_archives/\n*.mtar\n.env\n"
+    files["README.md"] = files.get("README.md", "") + (
+        "\n## Own backend (CAP)\n\nThis app has its own SAP CAP service in `backend/` "
+        f"(`{sa.service_path(domain)}`). See backend/README.md for the data model, the workflow and local "
+        "development (`cd backend && npx cds watch`, then `npm run start-cap`).\n")
+    rec = json.loads(files[app_import.DESIGN_FILE])
+    rec["standalone"] = {"domain": domain, "db": db}
+    files[app_import.DESIGN_FILE] = json.dumps(rec, indent=1, ensure_ascii=False)
+    return files
 
 
 def enhance_fe(*, original_text: Dict[str, str], info: Dict, edmx: str, blueprint: Dict, requirement: str,

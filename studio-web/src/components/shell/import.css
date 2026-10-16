@@ -1,0 +1,30 @@
+.ev-imp__tabs { display: grid; grid-template-columns: 1fr 1fr; gap: .6rem; }
+.ev-imp__tab { position: relative; display: flex; align-items: center; gap: .7rem; padding: .8rem .9rem; border-radius: 12px; cursor: pointer;
+  text-align: left; font: inherit; color: var(--sapTextColor); background: transparent; border: 1px solid var(--sapGroup_ContentBorderColor); transition: all .15s; }
+.ev-imp__tab:hover { border-color: var(--sapBrandColor); }
+.ev-imp__tab.is-on { border-color: var(--sapBrandColor); background: color-mix(in srgb, var(--sapBrandColor) 7%, transparent); }
+.ev-imp__tab b { display: block; font-size: .92rem; }
+.ev-imp__tab small { display: block; font-size: .74rem; color: var(--sapContent_LabelColor); }
+.ev-imp__tabicon { width: 2.2rem; height: 2.2rem; border-radius: 10px; display: grid; place-items: center; flex: none;
+  background: color-mix(in srgb, var(--sapBrandColor) 12%, transparent); color: var(--sapBrandColor); }
+.ev-imp__tabline { position: absolute; left: 12px; right: 12px; bottom: -1px; height: 3px; border-radius: 3px; background: var(--sapBrandColor); }
+.ev-imp__body { display: flex; flex-direction: column; gap: .7rem; margin-top: .9rem; }
+.ev-drop { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: .45rem; text-align: center; min-height: 190px;
+  padding: 1.4rem; border-radius: 14px; border: 2px dashed var(--sapGroup_ContentBorderColor); cursor: pointer; transition: all .15s; }
+.ev-drop:hover, .ev-drop.is-over { border-color: var(--sapBrandColor); background: color-mix(in srgb, var(--sapBrandColor) 5%, transparent); }
+.ev-drop__icon { width: 3rem; height: 3rem; border-radius: 14px; display: grid; place-items: center;
+  background: color-mix(in srgb, var(--sapBrandColor) 12%, transparent); color: var(--sapBrandColor); }
+.ev-drop__icon ui5-icon { width: 1.5rem; height: 1.5rem; }
+.ev-imp__space { display: flex; align-items: center; gap: .45rem; font-size: .84rem; }
+.ev-imp__space .ev-muted { margin-left: auto; }
+.ev-cfapps { display: flex; flex-direction: column; gap: .3rem; max-height: 330px; overflow: auto; padding-right: .2rem; }
+.ev-cfapp { display: flex; align-items: center; gap: .6rem; padding: .35rem .5rem .35rem .75rem; border-radius: 10px;
+  border: 1px solid var(--sapGroup_ContentBorderColor); }
+.ev-cfapp:hover { background: var(--sapList_Hover_Background); }
+.ev-cfapp__name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .86rem; }
+.ev-cfapp__state { width: .55rem; height: .55rem; border-radius: 50%; background: var(--sapNeutralColor); flex: none; }
+.ev-cfapp__state.is-on { background: var(--sapPositiveColor); }
+.ev-imp__job { padding: .9rem 1rem; border-radius: 12px; background: var(--sapList_HeaderBackground); }
+@media (max-width: 700px) { .ev-imp__tabs { grid-template-columns: 1fr; } }
+.ev-imp__loading { display: flex; flex-direction: column; align-items: center; gap: .5rem; padding: 1.2rem .5rem; text-align: center; }
+.ev-imp__loading > div:not(:first-child) { width: 100%; }

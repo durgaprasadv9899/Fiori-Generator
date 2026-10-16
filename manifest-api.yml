@@ -1,0 +1,25 @@
+applications:
+  # The studio engine as a REST API for the React UI (served by the approuter evoke-fiori-studio).
+  - name: evoke-studio-api
+    memory: 1G
+    disk_quota: 2G
+    buildpacks:
+      - python_buildpack
+    services:
+      - evokesd4-destination-service
+      - fiori-generator-connectivity
+      - evoke-fiori-studio-xsuaa
+      - evoke-studio-workspace
+      # user & role administration (Authorization and Trust Management API) — admins assign Evoke_Studio_* in the studio
+      - evoke-studio-user-admin
+    command: >
+      export PATH="$PWD/bin:$PATH";
+      chmod +x bin/* 2>/dev/null;
+      export CF_PLUGIN_HOME="$PWD/cf-plugins"; mkdir -p "$CF_PLUGIN_HOME";
+      (cf install-plugin -f bin/multiapps-plugin.linux64 > /tmp/plugin-install.log 2>&1
+      && echo "multiapps plugin registered") || echo "multiapps plugin NOT registered";
+      python -m uvicorn studio_api:app --host 0.0.0.0 --port $PORT --timeout-keep-alive 75
+    env:
+      STUDIO_SERVE_UI: "0"
+      STUDIO_ADMINS: dvoggu@evoketechnologies.com
+      # AI Core credentials: copied from fiori-generator-poc (cf set-env), never committed.

@@ -48,14 +48,21 @@ st.markdown(ui.CSS, unsafe_allow_html=True)
 LOGO = ui.logo_data_uri()
 
 
-def ai_call(system_prompt: str, user_prompt: str) -> str:
-    """The foundation model chosen in the sidebar (cached per model + temperature)."""
+def ai_fn():
+    """The foundation model chosen in the sidebar as a plain callable (cached per model +
+    temperature) — usable from background jobs, which have no access to st.session_state."""
+    if not has_ai():
+        return None
     model = st.session_state.get("ai_model")
     temp = st.session_state.get("temperature", 0.15)
     key = f"_ai_fn::{model}::{temp}"
     if key not in st.session_state:
         st.session_state[key] = ai_client.make_ai_fn(model, temperature=temp, max_tokens=16000)
-    return st.session_state[key](system_prompt, user_prompt)
+    return st.session_state[key]
+
+
+def ai_call(system_prompt: str, user_prompt: str) -> str:
+    return ai_fn()(system_prompt, user_prompt)
 
 
 def has_ai() -> bool:
@@ -63,36 +70,181 @@ def has_ai() -> bool:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Access gate (APP_ACCESS_PASSWORD on public routes)
+# Identity (XSUAA via approuter | named studio users | shared password | open)
 # ──────────────────────────────────────────────────────────────────────────────
-_ACCESS_PASSWORD = os.environ.get("APP_ACCESS_PASSWORD", "")
-if _ACCESS_PASSWORD and not st.session_state.get("_access_ok"):
-    import hmac as _hmac
+import access_control as ac
+import workspace as wsp
+
+AUTH_MODE = ac.auth_mode()
+STORE = wsp.get_store()
+try:
+    _headers = dict(st.context.headers or {})
+except Exception:  # noqa: BLE001
+    _headers = {}
+USER = ac.current_user(_headers, st.session_state)
+if USER is None and AUTH_MODE == "open":           # local development: the OS user, no prompt
+    import getpass as _gp
+    USER = ac.login_shared("", _gp.getuser(), st.session_state)
+if USER is None:
     st.markdown(ui.brand_bar(LOGO, []), unsafe_allow_html=True)
     st.markdown('<div style="height:3.5rem"></div>', unsafe_allow_html=True)
     _c = st.columns([1, 1.1, 1])[1]
     with _c:
         with st.container(key="login_card"):
-            st.markdown("**🔒 Access required**")
-            _pw = st.text_input("Access password", type="password", key="_access_pw",
-                                placeholder="Enter the studio access password")
-            if _pw and _hmac.compare_digest(_pw, _ACCESS_PASSWORD):
-                st.session_state["_access_ok"] = True
-                st.rerun()
-            elif _pw:
-                st.error("Wrong password.")
+            st.markdown("**🔒 Sign in**")
+            if AUTH_MODE == "xsuaa":
+                st.error("Your SAP BTP sign-in did not reach the studio. Open the studio through its approuter URL.")
+            else:
+                with st.form("login_form"):
+                    if AUTH_MODE == "local":
+                        _id = st.text_input("E-mail")
+                        _pw = st.text_input("Password", type="password")
+                    else:
+                        _id = st.text_input("Your name or e-mail", help="Recorded in the audit trail.")
+                        _pw = st.text_input("Access password", type="password",
+                                            placeholder="Enter the studio access password")
+                    _go = st.form_submit_button("Sign in", type="primary", use_container_width=True)
+                if _go:
+                    _u = (ac.login_local(_id, _pw, st.session_state) if AUTH_MODE == "local"
+                          else ac.login_shared(_pw, _id, st.session_state))
+                    if _u:
+                        STORE.audit(_u, None, "sign-in", {"source": _u.source})
+                        st.rerun()
+                    st.error("Wrong credentials." if AUTH_MODE == "local" or (_id or "").strip()
+                             else "Enter your name — it is recorded in the audit trail.")
+            st.caption(ac.describe_mode(AUTH_MODE))
         st.markdown('<div class="ev-login-foot">Protected workspace · Evoke Technologies</div>',
                     unsafe_allow_html=True)
     st.stop()
 
-for _key, _default in {"generated_files": {}, "generation_history": [], "deploy_log": [],
-                       "deployed_url": "", "step": 0, "refine_history": []}.items():
+# Streamlit drops a widget's value when that widget is not rendered in a run (another step, the
+# Projects page). Re-assigning keeps these inputs while the user moves around.
+for _key in ("user_prompt", "app_id_v", "bp_floorplan", "theme_v", "sa_db", "val_level", "dep_env", "style_text"):
+    if _key in st.session_state:
+        st.session_state[_key] = st.session_state[_key]
+
+for _key, _default in {"generated_files": {}, "deploy_log": [],
+                       "deployed_url": "", "step": 0, "refine_history": [], "view": "studio"}.items():
     st.session_state.setdefault(_key, _default)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Workspace: projects + versions (persistent), snapshot/restore of the studio state
+# ──────────────────────────────────────────────────────────────────────────────
+SNAPSHOT_KEYS = ("app_mode", "user_prompt", "app_id_v", "md_edmx", "md_service_url_val", "md_extra",
+                 "md_use_existing_dest", "md_dest_name_val", "md_on_premise", "md_auth", "bp_design",
+                 "theme_v", "app_style", "standalone", "build_result", "deploy_meta", "validation_report",
+                 "refine_history", "bp_floorplan")
+
+
+def current_project():
+    pid = st.session_state.get("project_id")
+    return STORE.get_project(pid) if pid else None
+
+
+def _snapshot() -> dict:
+    return {k: st.session_state.get(k) for k in SNAPSHOT_KEYS if st.session_state.get(k) is not None}
+
+
+def _ensure_project(name: str = "") -> dict:
+    """The open project, or a new one owned by the user (created on first save)."""
+    p = current_project()
+    if p:
+        return p
+    ac.require(USER, "project.create")
+    title = (name or ((st.session_state.get("bp_design") or {}).get("blueprint") or {}).get("app", {}).get("title")
+             or st.session_state.get("app_id_v") or "Untitled app")
+    p = STORE.create_project(title, USER, "standalone" if st.session_state.get("standalone") else
+                             ("import" if st.session_state.get("import_mode") else "sap"),
+                             app_id=st.session_state.get("app_id_v", ""),
+                             description=(st.session_state.get("user_prompt") or "")[:300])
+    st.session_state["project_id"] = p["id"]
+    return p
+
+
+def save_version(label: str = "") -> dict:
+    p = _ensure_project()
+    ac.require(USER, "version.save", p, STORE)
+    br = st.session_state.get("build_result") or {}
+    v = STORE.save_version(p["id"], USER, _snapshot(), st.session_state.generated_files or {}, label=label,
+                           quality=br.get("quality"), validation=st.session_state.get("validation_report"))
+    st.session_state["version_id"] = v["id"]
+    st.session_state["version_sha"] = v["sha"]
+    return v
+
+
+def files_saved() -> bool:
+    """Do the current files equal the last saved version (what approvals and deployments refer to)?"""
+    return bool(st.session_state.get("version_id")) and \
+        st.session_state.get("version_sha") == wsp.files_sha(st.session_state.generated_files or {})
+
+
+def restore_version(vid: str) -> None:
+    import metadata_parser as _mdp
+    v = STORE.restore_version(vid, USER)
+    if not v:
+        st.error("Version not found.")
+        return
+    for k in SNAPSHOT_KEYS + ("md_model", "import", "import_mode", "files_raw", "deployed_url", "_model_for"):
+        st.session_state.pop(k, None)
+    st.session_state.update(v["snapshot"])
+    if st.session_state.get("md_edmx"):
+        st.session_state["md_model"] = _mdp.parse_metadata(st.session_state["md_edmx"])
+    if st.session_state.get("bp_design"):
+        st.session_state["_bp_json_next"] = json.dumps(st.session_state["bp_design"]["blueprint"], indent=2)
+    st.session_state.generated_files = v["files"]
+    st.session_state.update(project_id=v["project_id"], version_id=v["id"], version_sha=v["sha"], view="studio",
+                            deployed_url="")
+    st.session_state["_goto"] = 3 if v["files"] else (2 if st.session_state.get("bp_design") else 0)
+
+
+def new_session() -> None:
+    """Start a new app (keeps sign-in, AI settings and CF session)."""
+    keep = {"ai_models", "ai_models_error", "ai_model", "temperature", "cf_home", "cf_target", ac.SESSION_KEY}
+    for k in list(st.session_state.keys()):
+        if k not in keep and not str(k).startswith("_ai_fn::"):
+            st.session_state.pop(k, None)
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Sidebar — AI settings, history
 # ──────────────────────────────────────────────────────────────────────────────
 with st.sidebar:
+    st.markdown("### Workspace")
+    st.markdown(f"<div class='ev-hist'><b>{USER.display}</b><br><span>"
+                f"{', '.join(ac.ROLE_LABELS.get(r, r) for r in sorted(USER.roles)) or 'no role'} · "
+                f"{ {'xsuaa': 'SAP BTP login', 'local': 'studio user', 'shared-password': 'shared password', 'open': 'local dev'}.get(USER.source, USER.source)}"
+                f"</span></div>", unsafe_allow_html=True)
+    _proj = current_project()
+    if _proj:
+        _vers = STORE.list_versions(_proj["id"])
+        st.caption(f"Project **{_proj['name']}** · {len(_vers)} version(s)"
+                   + ("" if files_saved() or not st.session_state.generated_files else " · unsaved changes"))
+    else:
+        st.caption("No project open — the first generated version creates one.")
+    _c1, _c2 = st.columns(2)
+    if _c1.button("📁 Projects", use_container_width=True,
+                  type="primary" if st.session_state.get("view") == "projects" else "secondary"):
+        st.session_state["view"] = "studio" if st.session_state.get("view") == "projects" else "projects"
+        st.rerun()
+    if _c2.button("＋ New app", use_container_width=True):
+        new_session()
+        st.rerun()
+    if st.session_state.generated_files and not files_saved() and ac.can(USER, "version.save", _proj, STORE):
+        if st.button("💾 Save version", use_container_width=True):
+            try:
+                _v = save_version("Saved manually")
+                st.toast(f"Saved version {_v['number']}")
+                st.rerun()
+            except PermissionError as _e:
+                st.error(str(_e))
+    if not STORE.durable:
+        st.caption("⚠️ " + STORE.durability_note)
+    if USER.source in ("local", "shared-password"):
+        if st.button("Sign out", use_container_width=True):
+            ac.logout(st.session_state)
+            new_session()
+            st.rerun()
+
     st.markdown("### AI model")
     if CREDENTIALS_LOADED:
         if "ai_models" not in st.session_state:
@@ -139,16 +291,17 @@ with st.sidebar:
     st.toggle("Coverage report", value=True, key="opt_coverage",
               help="Checks every requirement feature against the final design.")
 
-    st.markdown("### Recent apps")
-    if not st.session_state.generation_history:
-        st.caption("Generated apps appear here.")
-    for _i, _entry in enumerate(reversed(st.session_state.generation_history[-8:])):
-        st.markdown(f'<div class="ev-hist"><b>{_entry["name"]}</b><br><span>{_entry["time"]} · '
-                    f'{_entry["file_count"]} files · {_entry.get("floorplan", "")}</span></div>',
-                    unsafe_allow_html=True)
-        if st.button("Restore", key=f"restore_{_i}", use_container_width=True):
-            st.session_state.generated_files = _entry["files"]
-            st.session_state["_goto"] = 3
+    st.markdown("### Recent projects")
+    _recent = STORE.list_projects(USER, see_all=ac.can(USER, "project.view_all"))[:5]
+    if not _recent:
+        st.caption("Saved projects appear here.")
+    for _p in _recent:
+        _lv = STORE.latest_version(_p["id"], with_files=False)
+        st.markdown(f'<div class="ev-hist"><b>{_p["name"]}</b><br><span>{_p["mode"]} · '
+                    f'{("v" + str(_lv["number"]) + " · " + time.strftime("%d %b %H:%M", time.localtime(_lv["created_at"]))) if _lv else "no version"}'
+                    f'</span></div>', unsafe_allow_html=True)
+        if _lv and st.button("Open", key=f"open_{_p['id']}", use_container_width=True):
+            restore_version(_lv["id"])
             st.rerun()
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -173,6 +326,7 @@ with st.container(key="stepper"):
         if _col.button(f"{_mark}  {_t}", key=f"stepbtn_{_i}", help=_d, use_container_width=True,
                        type="primary" if _cur else "secondary"):
             st.session_state["step"] = _i
+            st.session_state["view"] = "studio"
             st.rerun()
 STEP = st.session_state["step"]
 
@@ -193,6 +347,98 @@ def nav_buttons(back: int = None, nxt: int = None, next_label: str = "Continue",
         goto(nxt)
 
 
+# ──────────────────────────────────────────────────────────────────────────────
+# Background jobs: AI design, generation, validation and deployment keep running while the
+# user switches steps, tabs or pages (a Streamlit rerun would otherwise stop them).
+# ──────────────────────────────────────────────────────────────────────────────
+import jobs
+
+try:
+    from streamlit.runtime.scriptrunner import get_script_run_ctx as _ctx
+    SESSION_ID = _ctx().session_id
+except Exception:  # noqa: BLE001
+    SESSION_ID = st.session_state.setdefault("_session_id", os.urandom(8).hex())
+jobs.heartbeat(SESSION_ID)
+
+RESTORE_KEYS = ("app_mode", "user_prompt", "app_id_v", "md_edmx", "md_service_url_val", "md_extra",
+                "md_use_existing_dest", "md_dest_name_val", "md_on_premise", "md_auth", "theme_v", "app_style",
+                "standalone", "bp_floorplan", "bp_design", "project_id", "version_id", "version_sha",
+                "deploy_meta", "build_result", "validation_report")
+
+
+def job_running(kind: str):
+    return jobs.running(USER.id, SESSION_ID, kind)
+
+
+def start_job(kind: str, label: str, fn, *args, target_step=None, extra=None, **kwargs):
+    """Start fn(say, *args, **kwargs) in the background and show its progress panel."""
+    ctx = {"origin_step": st.session_state.get("step", 0), "target_step": target_step,
+           "state": {k: st.session_state.get(k) for k in RESTORE_KEYS if st.session_state.get(k) is not None}}
+    ctx.update(extra or {})
+    jobs.start(kind, USER.id, SESSION_ID, label, fn, *args, context=ctx, **kwargs)
+    st.rerun()
+
+
+def _apply_job(job) -> None:
+    """Hand a finished job's result to the page (runs once, in the user's session)."""
+    job.applied = True
+    if job.session != SESSION_ID:            # the browser reconnected: restore the inputs first
+        st.session_state.update(job.context.get("state") or {})
+        if st.session_state.get("md_edmx") and not st.session_state.get("md_model"):
+            import metadata_parser as _mdp
+            st.session_state["md_model"] = _mdp.parse_metadata(st.session_state["md_edmx"])
+    if job.status == "error":
+        st.session_state["_job_error"] = f"{job.label} failed: {job.error}"
+        return
+    try:
+        _JOB_APPLY[job.kind](job)
+    except Exception as e:  # noqa: BLE001
+        st.session_state["_job_error"] = f"{job.label}: the result could not be applied ({e})"
+        return
+    st.session_state.setdefault("_job_done", f"{job.label} finished in {job.seconds:.0f}s")
+    tgt = job.context.get("target_step")
+    # take the user to the result only when they are still where they started it
+    if tgt is not None and st.session_state.get("step") == job.context.get("origin_step") \
+            and st.session_state.get("view", "studio") == "studio":
+        st.session_state["_goto"] = tgt
+
+
+def _job_box(job) -> None:
+    with st.container(border=True, key=f"jobbox_{job.id}"):
+        c1, c2 = st.columns([5, 1.3])
+        c1.markdown(f"⏳ **{job.label}** · {job.seconds:.0f}s  \n"
+                    "<span style='color:var(--ev-muted);font-size:.82rem'>Runs in the background — you can switch "
+                    "steps, tabs or pages; the result is applied when it is ready.</span>", unsafe_allow_html=True)
+        c2.markdown(ui.chip("running", "accent"), unsafe_allow_html=True)
+        if job.messages:
+            st.caption("  \n".join(m[:220] for m in job.messages[-5:]))
+
+
+@st.fragment(run_every=2)
+def _jobs_live():
+    jobs.heartbeat(SESSION_ID)
+    act = jobs.active(USER.id, SESSION_ID)
+    finished = [j for j in act if not j.running]
+    if finished:
+        for j in finished:
+            _apply_job(j)
+        st.rerun()                           # whole page: show the result
+    for j in act:
+        _job_box(j)
+
+
+def jobs_panel():
+    for k, kind in (("_job_done", "success"), ("_job_error", "error")):
+        msg = st.session_state.pop(k, None)
+        if msg:
+            (st.toast if kind == "success" else st.error)(("✅ " if kind == "success" else "") + msg)
+    if jobs.active(USER.id, SESSION_ID):
+        _jobs_live()
+
+
+_JOB_SLOT = st.container()          # filled at the end of the script (all apply handlers defined)
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # STEP 1 — Connect
 # ══════════════════════════════════════════════════════════════════════════════
@@ -206,6 +452,7 @@ def _store_metadata(edmx: str, service_url: str) -> None:
     st.session_state["md_model"] = model
     st.session_state["md_service_url_val"] = service_url
     st.session_state.pop("bp_design", None)       # a new service invalidates the design
+    st.session_state.pop("standalone", None)      # …and replaces a generated backend
 
 
 def _add_extra_service(edmx: str, service_url: str, model: dict) -> None:
@@ -240,7 +487,26 @@ def _app_model():
                               _extra_services())
 
 
+APP_MODES = {"sap": "🔌 Connect to SAP", "standalone": "🧱 Create a new app"}
+
+
 def step_connect():
+    with st.container(key="tabs_appmode"):
+        mode = st.segmented_control(
+            "What are you building?", list(APP_MODES), format_func=APP_MODES.get,
+            default=st.session_state.get("app_mode") or "sap", key="app_mode_v",
+            help="Connect to SAP: use an existing OData service and destination. Create a new app: the AI "
+                 "generates the data model, a CAP backend with database and business process, and the UI.")
+    mode = mode or "sap"
+    if mode != (st.session_state.get("app_mode") or "sap"):
+        st.session_state["app_mode"] = mode
+        if mode == "sap" and st.session_state.get("standalone"):      # leave the generated backend
+            for k in ("standalone", "md_model", "md_edmx", "md_service_url_val", "bp_design"):
+                st.session_state.pop(k, None)
+            st.session_state.generated_files = {}
+    if mode == "standalone":
+        step_new_app()
+        return
     st.markdown(ui.header("Step 1", "Connect your OData service",
                           "The AI designs only with entity sets, fields and operations that really exist in "
                           "the service, so the generated app works against your backend from the first run."),
@@ -270,6 +536,166 @@ def step_connect():
         _connection_summary()
     nav_buttons(nxt=1, next_label="Describe the app", next_disabled=not st.session_state.get("md_model"),
                 next_help=None if st.session_state.get("md_model") else "Load a service first.")
+
+
+NEW_APP_EXAMPLES = {
+    "Purchase request": "A purchase request application with multiple line items, manager approval (approve / "
+                        "reject with a reason), totals calculated from the items, and finance reporting by "
+                        "department and month.",
+    "Leave request": "A leave request app: employees request vacation or sick leave with start and end date, the "
+                     "number of days is calculated, the team lead approves or rejects, and a calendar shows absences.",
+    "Service tickets": "A service ticket app for our support team: tickets with priority, category and due date, "
+                       "a board by status (new, in progress, resolved, closed), comments per ticket and a dashboard "
+                       "of open tickets per priority.",
+}
+
+
+def step_new_app():
+    """Standalone mode: requirement -> (clarifying questions) -> data model + process -> CAP backend."""
+    import standalone as _sa
+    st.markdown(ui.header("Step 1", "Describe the new application",
+                          "The AI designs the data model, the business process (e.g. approvals) and sample data. "
+                          "The studio then generates a CAP backend with its own database and the Fiori UI on top."),
+                unsafe_allow_html=True)
+    st.session_state.setdefault("user_prompt", "")
+    if "_pending_template" in st.session_state:
+        st.session_state["user_prompt"] = st.session_state.pop("_pending_template")
+    left, right = st.columns([1.35, 1], gap="large")
+    with left:
+        ex = st.pills("Start from an example", list(NEW_APP_EXAMPLES), key="sa_ex_pick", selection_mode="single")
+        if ex and st.session_state.get("_sa_ex_last") != ex:
+            st.session_state["_sa_ex_last"] = ex
+            st.session_state["_pending_template"] = NEW_APP_EXAMPLES[ex]
+            st.rerun()
+        st.text_area("What would you like to build?", key="user_prompt", height=170,
+                     placeholder="e.g. Create a purchase request application with multiple line items, manager "
+                                 "approval and finance reporting.")
+        req = (st.session_state.get("user_prompt") or "").strip()
+        c1, c2 = st.columns(2)
+        qbusy = job_running("questions")
+        if c1.button("⏳ Reviewing…" if qbusy else "❓ Check the requirement", use_container_width=True,
+                     disabled=not (req and has_ai()) or bool(qbusy),
+                     help="The AI asks questions when roles, approval levels or data are unclear."
+                     if has_ai() else "Needs an AI model."):
+            start_job("questions", "Reviewing the requirement",
+                      lambda say, r, fn: {"req": r, "questions": _sa.clarifying_questions(r, fn)}, req, ai_fn())
+        qs = st.session_state.get("sa_questions") or []
+        answers = {}
+        if qs and st.session_state.get("sa_questions_for") == req:
+            with st.container(border=True):
+                st.markdown("**The AI needs a few details**")
+                for q in qs:
+                    opts = q["options"]
+                    if opts:
+                        a = st.selectbox(q["question"], ["(let the AI decide)"] + opts + ["Other…"], key=f"sa_q_{q['id']}",
+                                         help=q.get("why") or None)
+                        if a == "Other…":
+                            a = st.text_input("Your answer", key=f"sa_qo_{q['id']}", label_visibility="collapsed")
+                        elif a == "(let the AI decide)":
+                            a = ""
+                    else:
+                        a = st.text_input(q["question"], key=f"sa_q_{q['id']}", help=q.get("why") or None)
+                    if (a or "").strip():
+                        answers[q["question"]] = a
+        busy = job_running("domain")
+        if c2.button("⏳ Designing…" if busy else "🧱 Design data model", type="primary", use_container_width=True,
+                     disabled=not req or bool(busy)):
+            start_job("domain", "Designing the data model and process",
+                      lambda say, r, fn, ans: _sa.design_domain(r, fn, ans, progress=say), req, ai_fn(), answers)
+    with right:
+        draft = st.session_state.get("sa_draft")
+        cur = st.session_state.get("standalone")
+        if not draft and not cur:
+            st.markdown(ui.empty("🧱", "No data model yet",
+                                 "Describe the app and choose Design data model. You can review and edit the "
+                                 "entities, fields and workflow before anything is generated."),
+                        unsafe_allow_html=True)
+        else:
+            domain = (draft or {}).get("domain") or cur["domain"]
+            _domain_review(domain, (draft or {}).get("notes") or [])
+    if st.session_state.get("sa_draft"):
+        _domain_editor()
+    nav_buttons(nxt=1, next_label="Describe the screens", next_disabled=not st.session_state.get("standalone"),
+                next_help=None if st.session_state.get("standalone") else "Accept a data model first.")
+
+
+def _apply_questions(job):
+    st.session_state["sa_questions"] = job.result["questions"]
+    st.session_state["sa_questions_for"] = job.result["req"]
+    if not job.result["questions"]:
+        st.session_state["_job_done"] = "The requirement is clear enough — design the data model."
+
+
+def _apply_domain(job):
+    st.session_state["sa_draft"] = job.result
+    st.session_state["_sa_json_next"] = json.dumps(job.result["domain"], indent=2)
+    st.session_state["app_mode"] = "standalone"
+
+
+def _domain_review(domain, notes):
+    import standalone as _sa
+    wf = domain.get("workflow")
+    st.markdown(ui.metrics([("Entities", len(domain["entities"]), domain["title"], True),
+                            ("Fields", sum(len(e["fields"]) for e in domain["entities"]), "incl. calculated"),
+                            ("Workflow", len(wf["transitions"]) if wf else 0, "transitions" if wf else "none")]),
+                unsafe_allow_html=True)
+    with st.container(border=True):
+        for e in domain["entities"]:
+            st.markdown(f"**{e['label']}** <code>{e['name']}</code>" + (f" · item of {e['parent']}" if e.get("parent") else ""),
+                        unsafe_allow_html=True)
+            st.caption(" · ".join(f"{f['label']}{'*' if f.get('required') else ''}"
+                                  + (" (calc.)" if f.get("formula") else "") for f in e["fields"]))
+        if wf:
+            st.markdown("**Process** — " + " → ".join(s["label"] for s in wf["states"]))
+            st.caption(" · ".join(f"{t['label']}: {'/'.join(t['from'])} → {t['to']}"
+                                  + (f" (role {t['role']})" if t.get("role") and wf.get("enforce_roles") else "")
+                                  for t in wf["transitions"]))
+        for n in notes:
+            st.caption("ℹ️ " + n)
+    cur = st.session_state.get("standalone") or {}
+    db = st.radio("Database of the deployed app", ["sqlite", "hana"], horizontal=True, key="sa_db",
+                  index=0 if cur.get("db", "sqlite") == "sqlite" else 1,
+                  format_func={"sqlite": "SQLite in memory (demo — data resets on restart)",
+                               "hana": "SAP HANA Cloud (persistent, needs an HDI container)"}.get)
+    if db == "hana":
+        st.caption("⚠️ HANA needs a HANA Cloud instance in the subaccount (an hdi-shared service is created at "
+                   "deploy) and Node.js to build the database module — build it in SAP Business Application Studio.")
+    is_current = cur.get("domain") == domain and cur.get("db") == db
+    if st.button("✅ Use this data model" if not is_current else "✓ Data model in use", type="primary",
+                 use_container_width=True, disabled=is_current):
+        _use_domain(domain, db)
+        st.rerun()
+
+
+def _domain_editor():
+    import standalone as _sa
+    with st.expander("{ }  Data model JSON (expert)"):
+        if "_sa_json_next" in st.session_state:
+            st.session_state["sa_json"] = st.session_state.pop("_sa_json_next")
+        st.text_area("Domain JSON", key="sa_json", height=320, label_visibility="collapsed")
+        if st.button("Apply JSON changes", key="sa_json_apply"):
+            try:
+                dom, notes = _sa.validate_domain(json.loads(st.session_state["sa_json"]))
+                st.session_state["sa_draft"] = {"domain": dom, "notes": notes, "source": "edited"}
+                st.session_state["_sa_json_next"] = json.dumps(dom, indent=2)
+                st.rerun()
+            except ValueError as e:
+                st.error(f"Not valid JSON: {e}")
+
+
+def _use_domain(domain, db):
+    """Generated backend: its EDMX drives the normal design pipeline."""
+    import standalone as _sa
+    import metadata_parser as _mdp
+    edmx = _sa.to_edmx(domain)
+    st.session_state.update(md_edmx=edmx, md_model=_mdp.parse_metadata(edmx), md_service_url_val=_sa.service_path(domain),
+                            md_extra=[], md_use_existing_dest=False, md_dest_name_val="", md_on_premise=False,
+                            md_auth=AUTH_NONE, standalone={"domain": domain, "db": db}, app_mode="standalone")
+    if not st.session_state.get("app_id_v") or st.session_state.get("app_id_v") == "com.mycompany.app":
+        st.session_state["app_id_v"] = "com.evoke." + re.sub(r"[^a-z0-9]", "", domain["name"].lower())[:30]
+    for k in ("bp_design", "_model_for", "sa_draft"):
+        st.session_state.pop(k, None)
+    st.session_state.generated_files = {}
 
 
 def _connect_btp():
@@ -574,6 +1000,8 @@ def _apply_import(text, binary, info):
                                                     "detail": f"design of {d.get('app_id')} restored (saved {d.get('saved_at', '')})"}]}
         st.session_state["_bp_json_next"] = json.dumps(d["blueprint"], indent=2)
         st.session_state["import_mode"] = "generated"
+        if d.get("standalone"):              # app with a generated CAP backend: restore its data model
+            st.session_state.update(standalone=d["standalone"], app_mode="standalone")
         goto(2)
     if not st.session_state.get("md_model"):
         st.warning("The project has no local service metadata — load the service with one of the other sources, "
@@ -696,6 +1124,10 @@ def step_describe():
                           "see, which rules and calculations apply, what users can change. Standard Fiori "
                           "floorplans and fully custom multi-page apps are both supported."),
                 unsafe_allow_html=True)
+    if st.session_state.get("standalone"):
+        st.info(f"New app with a generated backend — data model **{st.session_state['standalone']['domain']['title']}** "
+                f"({st.session_state.get('md_service_url_val')}). Add what the screens should show; the data model "
+                "itself is changed in step 1.", icon="🧱")
     st.session_state.setdefault("user_prompt", "")
     if "_pending_template" in st.session_state:
         st.session_state["user_prompt"] = st.session_state.pop("_pending_template")
@@ -732,41 +1164,44 @@ def step_describe():
     if c1.button("← Back", use_container_width=True):
         goto(0)
     ready = bool(st.session_state["user_prompt"].strip())
-    if c3.button("✨ Design my app", type="primary", use_container_width=True, disabled=not ready):
+    busy = job_running("design")
+    if c3.button("⏳ Designing…" if busy else "✨ Design my app", type="primary", use_container_width=True,
+                 disabled=not ready or bool(busy)):
         _run_design()
 
 
 def _run_design():
+    """Start the design in the background (inputs are captured now; the job never reads the session)."""
+    fp = st.session_state.get("bp_floorplan", "auto")
+    fn = ai_fn()
+    opts = {"analyze_first": st.session_state.get("opt_analyze", True),
+            "repair": st.session_state.get("opt_repair", True),
+            "check_coverage": st.session_state.get("opt_coverage", True),
+            "cache_tag": f"{st.session_state.get('ai_model')}|{st.session_state.get('temperature')}"} if fn else {}
+    start_job("design", "Designing your application", _w_design, st.session_state["user_prompt"],
+              st.session_state.get("standalone"), st.session_state["md_edmx"],
+              st.session_state.get("md_service_url_val", ""), _extra_services(),
+              _app_model() if fn and not st.session_state.get("standalone") else None,
+              fn, "" if fp == "auto" else fp, st.session_state.get("app_style"), opts, target_step=2)
+
+
+def _w_design(say, requirement, sa_state, edmx, service_url, extra, model, fn, fp, style, opts):
     import app_builder as _ab
     import ai_designer as _ad
-    fp = st.session_state.get("bp_floorplan", "auto")
-    with st.status("Designing your application…", expanded=True) as status:
-        t0 = time.time()
-        try:
-            if has_ai():
-                model = _app_model()
-                res = _ad.design(st.session_state["user_prompt"], model, ai_call, "" if fp == "auto" else fp,
-                                 st.session_state.get("app_style"),
-                                 analyze_first=st.session_state.get("opt_analyze", True),
-                                 repair=st.session_state.get("opt_repair", True),
-                                 check_coverage=st.session_state.get("opt_coverage", True),
-                                 progress=lambda m: status.write(m),
-                                 cache_tag=f"{st.session_state.get('ai_model')}|{st.session_state.get('temperature')}")
-            else:
-                status.write("No AI model — using the rule-based designer.")
-                res = _ab.design(st.session_state["user_prompt"], st.session_state["md_edmx"], None,
-                                 "" if fp == "auto" else fp, st.session_state.get("app_style"),
-                                 service_url=st.session_state.get("md_service_url_val", ""),
-                                 extra_services=_extra_services())
-        except Exception as e:  # noqa: BLE001
-            status.update(label=f"Design failed: {e}", state="error")
-            return
-        status.update(label=f"Design ready in {time.time() - t0:.0f}s", state="complete", expanded=False)
+    if sa_state:
+        return _ab.design_standalone(requirement, sa_state["domain"], fn, fp, style, progress=say, **opts)
+    if fn:
+        return _ad.design(requirement, model, fn, fp, style, progress=say, **opts)
+    say("No AI model — using the rule-based designer.")
+    return _ab.design(requirement, edmx, None, fp, style, service_url=service_url, extra_services=extra)
+
+
+def _apply_design(job):
+    res = job.result
     st.session_state["bp_design"] = {k: res.get(k) for k in ("blueprint", "notes", "source", "spec", "coverage", "steps")}
-    st.session_state["bp_json"] = json.dumps(res["blueprint"], indent=2)
+    st.session_state["_bp_json_next"] = json.dumps(res["blueprint"], indent=2)
     st.session_state["refine_history"] = []
     st.session_state.generated_files = {}
-    goto(2)
 
 
 def _look_and_feel():
@@ -916,13 +1351,14 @@ def step_review():
     if design.get("steps"):
         st.markdown(ui.timeline(design["steps"]) + ui.chip(src, "accent"), unsafe_allow_html=True)
 
-    t_prev, t_cov, t_spec, t_notes, t_json = st.tabs(
-        ["🖥  App preview", "✅  Coverage" + (f" ({score}%)" if score is not None else ""), "📋  Specification",
-         f"⚙️  Design notes ({len(design['notes'])})", "{ }  Blueprint"])
+    t_prev, t_wire, t_cov, t_spec, t_notes, t_json = st.tabs(
+        ["▶  Try the app", "🖥  Wireframe", "✅  Coverage" + (f" ({score}%)" if score is not None else ""),
+         "📋  Specification", f"⚙️  Design notes ({len(design['notes'])})", "{ }  Blueprint"])
     with t_prev:
-        st.caption("Interactive wireframe with the real field labels — click the navigation, rows and cards.")
-        model = _model()
-        components.html(ui_preview.wireframe_html(bp, model), height=560, scrolling=False)
+        _interactive_preview(bp)
+    with t_wire:
+        st.caption("Wireframe with the real field labels — click the navigation, rows and cards.")
+        components.html(ui_preview.wireframe_html(bp, _model()), height=560, scrolling=False)
         _structure(bp)
     with t_cov:
         if cov:
@@ -985,8 +1421,40 @@ def step_review():
     c1, _, c3 = st.columns([1, 2.2, 1.4])
     if c1.button("← Back", use_container_width=True, key="rv_back"):
         goto(1)
-    if c3.button("🚀 Generate application", type="primary", use_container_width=True):
+    gbusy = job_running("generate")
+    if c3.button("⏳ Generating…" if gbusy else "🚀 Generate application", type="primary", use_container_width=True,
+                 disabled=bool(gbusy)):
         _generate(design)
+
+
+def _interactive_preview(bp):
+    """Clickable prototype of the design with sample data — clearly NOT the live backend."""
+    import interactive_preview as _ip
+    sa_state = st.session_state.get("standalone")
+    rows, workflow = None, None
+    if sa_state:
+        import standalone as _sa
+        rows = {}
+        for path, text in _sa.mock_data(sa_state["domain"]).items():
+            try:
+                rows[path.rsplit("/", 1)[-1].rsplit(".", 1)[0]] = json.loads(text)
+            except ValueError:
+                pass
+        wf = sa_state["domain"].get("workflow")
+        if wf:
+            workflow = {t["action"]: {"field": wf["status_field"], "from": list(t["from"]), "to": t["to"]}
+                        for t in wf["transitions"]}
+    st.markdown(ui.chip("MOCK DATA", "warn") + (
+        " <span style='font-size:.86rem'>Sample records of the generated backend's seed data, kept in your browser. "
+        "Nothing is saved. The deployed app uses its own CAP service and database.</span>" if sa_state else
+        " <span style='font-size:.86rem'>Generated sample records — nothing is read from or sent to "
+        f"<code>{st.session_state.get('md_service_url_val', '')}</code>. The deployed app reads the live SAP service.</span>"),
+                unsafe_allow_html=True)
+    try:
+        components.html(_ip.preview_html(bp, _model(), sample_rows=rows, workflow=workflow, height=620),
+                        height=640, scrolling=False)
+    except Exception as e:  # noqa: BLE001
+        st.warning(f"The interactive preview could not render this design ({e}). Use the Wireframe tab.")
 
 
 def _logic_count(bp) -> int:
@@ -1058,49 +1526,70 @@ def _generate(design):
         _generate_client_fe(design)
         return
     st.session_state["files_raw"] = False
+    sa_state = st.session_state.get("standalone")
     svc = (st.session_state.get("md_service_url_val") or "").strip()
     if not svc or "YOUR_SERVICE" in svc:
         st.error("No OData service path set for the app (e.g. /sap/opu/odata/sap/API_SALES_ORDER_SRV/). "
                  "Set it in step 1 — otherwise every data request 404s.")
         return
     use_existing = bool(st.session_state.get("md_use_existing_dest"))
-    with st.status("Generating the application…", expanded=True) as status:
-        status.write("Rendering views, controllers, custom logic and configuration…")
-        if has_ai() and len(design["blueprint"]["app"]["languages"]) > 1:
-            status.write(f"Translating texts into {', '.join(design['blueprint']['app']['languages'][1:])}…")
-        try:
-            res = _ab.build(
-                edmx=st.session_state["md_edmx"], requirement=st.session_state.get("user_prompt", ""),
-                app_id=st.session_state.get("app_id_v", "com.mycompany.app"), service_url=svc,
-                ai_fn=ai_call if has_ai() else None, blueprint=design["blueprint"],
-                auth_type=st.session_state.get("md_auth", AUTH_NONE) if not use_existing else AUTH_NONE,
-                use_existing_destination=use_existing,
-                destination_name=(st.session_state.get("md_dest_name_val") or "").strip(),
-                on_premise=bool(st.session_state.get("md_on_premise")),
-                theme=st.session_state.get("theme_v", "sap_horizon"),
-                style=st.session_state.get("app_style"), logo_data_uri=_logo_uri(),
-                design_spec=design.get("spec"), coverage=design.get("coverage"),
-                extra_services=_extra_services())
-        except Exception as e:  # noqa: BLE001
-            status.update(label=f"Generation failed: {e}", state="error")
-            return
-        status.update(label=f"Generated {len(res.files)} files", state="complete", expanded=False)
+    kwargs = dict(
+        edmx=st.session_state["md_edmx"], requirement=st.session_state.get("user_prompt", ""),
+        app_id=st.session_state.get("app_id_v", "com.mycompany.app"), service_url=svc,
+        ai_fn=ai_fn(), blueprint=design["blueprint"],
+        auth_type=st.session_state.get("md_auth", AUTH_NONE) if not use_existing else AUTH_NONE,
+        use_existing_destination=use_existing,
+        destination_name=(st.session_state.get("md_dest_name_val") or "").strip(),
+        on_premise=bool(st.session_state.get("md_on_premise")),
+        theme=st.session_state.get("theme_v", "sap_horizon"),
+        style=st.session_state.get("app_style"), logo_data_uri=_logo_uri(),
+        design_spec=design.get("spec"), coverage=design.get("coverage"),
+        extra_services=_extra_services(),
+        **({"standalone": sa_state["domain"], "standalone_db": sa_state.get("db", "sqlite")} if sa_state else {}))
+    start_job("generate", "Generating the application", _w_generate, kwargs, target_step=3)
+
+
+def _w_generate(say, kwargs):
+    import app_builder as _ab
+    say("Rendering views, controllers, custom logic and configuration…")
+    langs = kwargs["blueprint"]["app"]["languages"]
+    if kwargs.get("ai_fn") and len(langs) > 1:
+        say(f"Translating texts into {', '.join(langs[1:])}…")
+    if kwargs.get("standalone"):
+        say("Generating the CAP backend (data model, service, workflow, sample data)…")
+    res = _ab.build(**kwargs)
+    say(f"Generated {len(res.files)} files — quality gate: {res.quality.get('errors', 0)} error(s).")
+    return res
+
+
+def _apply_generate(job):
+    res = job.result
+    sa_state = st.session_state.get("standalone")
+    design = st.session_state.get("bp_design") or {}
+    st.session_state["files_raw"] = False
     st.session_state.generated_files = res.files
     design["blueprint"] = res.blueprint
     st.session_state["build_result"] = {"quality": res.quality, "fixes": res.fixes, "notes": res.notes,
                                         "floorplan": res.blueprint["floorplan"],
                                         "odata": res.model["odata_version"], "title": res.blueprint["app"]["title"]}
-    st.session_state["deploy_meta"] = {
-        "app_id": res.spec.app_id,
-        "services": [{"id": s.id, "url": s.url, "auth_type": s.auth_type, "dest_name": s.dest_name(),
-                      "needs_auth": s.needs_auth(), "is_real": s.is_real(),
-                      "use_existing_destination": s.use_existing_destination, "on_premise": s.on_premise}
-                     for s in res.spec.service_list()]}
-    st.session_state.generation_history.append({
-        "name": res.blueprint["app"]["title"], "prompt": st.session_state.get("user_prompt", ""),
-        "files": res.files, "file_count": len(res.files), "time": time.strftime("%H:%M"),
-        "floorplan": res.blueprint["floorplan"]})
-    goto(3)
+    st.session_state.pop("validation_report", None)
+    if sa_state:
+        st.session_state["deploy_meta"] = {"app_id": res.spec.app_id, "services": [], "standalone": True,
+                                           "db": sa_state.get("db", "sqlite")}
+    else:
+        st.session_state["deploy_meta"] = {
+            "app_id": res.spec.app_id,
+            "services": [{"id": s.id, "url": s.url, "auth_type": s.auth_type, "dest_name": s.dest_name(),
+                          "needs_auth": s.needs_auth(), "is_real": s.is_real(),
+                          "use_existing_destination": s.use_existing_destination, "on_premise": s.on_premise}
+                         for s in res.spec.service_list()]}
+    try:                     # every generation is a restorable version of the project
+        v = save_version("Generated")
+        STORE.audit(USER, v["project_id"], "app.generate",
+                    {"version": v["number"], "files": len(res.files), "floorplan": res.blueprint["floorplan"],
+                     "quality_errors": res.quality.get("errors", 0)})
+    except PermissionError as e:
+        st.session_state["_job_error"] = f"Generated, but not saved to the workspace: {e}"
 
 
 def _generate_client_fe(design):
@@ -1231,6 +1720,7 @@ def step_build():
             for n in br.get("notes") or []:
                 st.markdown(f"- ℹ️ {n}")
 
+    _validation_panel(files)
     st.markdown("#### Files")
     if st.session_state.get("files_raw") and st.session_state.get("raw_changed"):
         import app_import
@@ -1267,6 +1757,81 @@ def step_build():
     nav_buttons(back=2, nxt=4, next_label="Deploy to BTP")
 
 
+_VSTAT = {"passed": ("Passed", "ok"), "failed": ("Failed", "bad"), "not_tested": ("Not tested", ""),
+          "warning": ("Warning", "warn")}
+
+
+def _apply_validate(job):
+    rep = job.result
+    st.session_state["validation_report"] = rep
+    n = rep["summary"]
+    st.session_state["_job_done"] = (f"Validation: {n['passed']} passed · {n['failed']} failed · "
+                                     f"{n['not_tested']} not tested" + (" — deployment blocked" if rep["blocking"] else ""))
+    if st.session_state.get("version_id") and st.session_state.get("version_sha") == job.context.get("files_sha"):
+        STORE.set_validation(st.session_state["version_id"], rep, USER)
+    else:
+        STORE.audit(USER, st.session_state.get("project_id"), "validation.run",
+                    {"level": job.context.get("level"), "summary": n, "blocking": rep["blocking"]})
+
+
+def _validation_panel(files):
+    """Real build/runtime validation in a sandbox (node, ui5 build, CAP compile + server, headless browser)."""
+    import build_validation as _bv
+    if st.session_state.get("files_raw"):
+        st.caption("Build validation runs on projects generated by the studio; client projects use the quality "
+                   "gate above.")
+        return
+    rep = st.session_state.get("validation_report")
+    with st.container(border=True):
+        c1, c2, c3 = st.columns([2.2, 1.3, 1])
+        c1.markdown("**🧪 Build & runtime validation**")
+        c1.caption("Builds and runs the project in a sandbox: JavaScript syntax, UI5 build, MTA/approuter wiring, "
+                   "CAP compile + backend smoke test, and (deep) a headless-browser start of the app.")
+        level = c2.segmented_control("Level", ["standard", "deep"], default="standard", key="val_level",
+                                     format_func={"standard": "Standard", "deep": "Deep (browser)"}.get) or "standard"
+        vbusy = job_running("validate")
+        if c3.button("⏳ Validating…" if vbusy else "Run validation", type="primary", use_container_width=True,
+                     disabled=bool(vbusy)):
+            design = st.session_state.get("bp_design") or {}
+            start_job("validate", f"Validating the project ({level})",
+                      lambda say, f, m, cov, lv: _bv.run(f, model=m, coverage=cov, level=lv, progress=say),
+                      dict(files), _model() if st.session_state.get("md_edmx") else None, design.get("coverage"), level,
+                      extra={"files_sha": wsp.files_sha(files), "level": level})
+        if not rep:
+            env = _bv.environment()
+            if not env.get("node"):
+                st.caption("⚠️ Node.js is not available on this host — build, backend and browser checks will be "
+                           "reported as not tested. Run the studio locally / in BAS for the full validation.")
+            return
+        n = rep["summary"]
+        st.markdown(ui.metrics([
+            ("Result", "<span style='color:var(--ev-bad)'>Blocked</span>" if rep["blocking"] else
+             "<span style='color:var(--ev-ok)'>Deployable</span>", f"level {rep.get('level', '')} · {rep.get('seconds', 0):.0f}s", True),
+            ("Passed", n["passed"], "checks"), ("Failed", n["failed"], "checks"),
+            ("Not tested", n["not_tested"], "tool unavailable or skipped")]), unsafe_allow_html=True)
+        if rep["blocking"]:
+            st.error("Deployment is blocked by: " + "; ".join(rep["blocking"]))
+        t1, t2 = st.tabs([f"Checks ({len(rep['checks'])})", f"Requirements ({len(rep.get('requirements') or [])})"])
+        with t1:
+            for c in rep["checks"]:
+                lab, kind = _VSTAT.get(c["status"], (c["status"], ""))
+                st.markdown(f"{ui.chip(lab, kind)} **{c['name']}** <span style='color:var(--ev-muted);font-size:.8rem'>"
+                            f"{c['category']}{' · critical' if c.get('critical') else ''}</span>",
+                            unsafe_allow_html=True)
+                if c.get("detail") and c["status"] != "passed":
+                    st.caption(c["detail"][:600])
+        with t2:
+            if not rep.get("requirements"):
+                st.caption("No requirement coverage — turn on the analysis + coverage report (sidebar) when designing.")
+            for r in rep.get("requirements") or []:
+                lab, kind = _VSTAT.get(r["status"], (r["status"], ""))
+                st.markdown(f"{ui.chip(lab, kind)} {r['feature']}", unsafe_allow_html=True)
+                if r.get("detail"):
+                    st.caption(r["detail"][:300])
+        st.download_button("⬇ Validation report (.md)", data=_bv.format_markdown(rep), file_name="validation-report.md",
+                           mime="text/markdown")
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # STEP 5 — Deploy
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1287,11 +1852,16 @@ def step_deploy():
     if st.session_state.get("files_raw"):
         st.info("Deploying the client's project with its own mta.yaml — its destinations and services must "
                 "already exist in the space.", icon="ℹ️")
-    st.markdown(ui.header("Step 5", "Deploy to SAP BTP Cloud Foundry",
-                          "Builds the MTA and deploys the approuter with XSUAA login, the destination and (for "
-                          "on-premise systems) the connectivity service."), unsafe_allow_html=True)
-    mta_text = files.get("mta.yaml", "")
     meta = st.session_state.get("deploy_meta", {})
+    st.markdown(ui.header("Step 5", "Approve & deploy to SAP BTP",
+                          ("Builds the MTA and deploys the CAP backend (" + ("SAP HANA Cloud" if meta.get("db") == "hana"
+                           else "in-memory SQLite") + "), the approuter and XSUAA login." if meta.get("standalone") else
+                           "Builds the MTA and deploys the approuter with XSUAA login, the destination and (for "
+                           "on-premise systems) the connectivity service.")
+                          + " Each environment has its own rules: production needs an approved, validated version."),
+                unsafe_allow_html=True)
+    gate_ok, env_key, env_cfg = _release_panel()
+    mta_text = files.get("mta.yaml", "")
     needs_dest = any(s.get("is_real") for s in meta.get("services", []))
     if needs_dest and not ("resources:" in mta_text and "requires:" in mta_text):
         st.error("This project's mta.yaml has no service bindings — it was generated by an older version. "
@@ -1305,6 +1875,10 @@ def step_deploy():
             signed_in = _cf_signin("dep")
     t = st.session_state.get("cf_target") or dict(CF_DEFAULTS)
     cf_api, cf_org, cf_space = t["api"], t["org"], t["space"]
+    if env_cfg.get("configured"):        # the environment decides where it goes
+        cf_api, cf_org, cf_space = env_cfg["api"], env_cfg["org"], env_cfg["space"]
+        with left:
+            st.caption(f"Target of {env_cfg['label']}: org `{cf_org}` · space `{cf_space}`")
     use_sso, cf_passcode, cf_user, cf_pass = False, "", "", ""
     creds_ok = signed_in
 
@@ -1347,19 +1921,99 @@ def step_deploy():
     if protected and missing:
         st.warning("Fill in every destination field first:\n" + "\n".join(f"- {f}" for f in missing))
     method = "MTA Build + Deploy"
-    if not protected and not st.session_state.get("files_raw"):
+    if not protected and not st.session_state.get("files_raw") and not meta.get("standalone"):
         method = st.segmented_control("Method", ["MTA Build + Deploy", "cf push (static)"], default="MTA Build + Deploy",
                                       key="dep_method") or "MTA Build + Deploy"
 
-    if st.button("🚀 Deploy", type="primary", use_container_width=True,
-                 disabled=not (cf_org and cf_space and creds_ok) or bool(protected and missing)):
-        _deploy(files, meta, cf_api, cf_org, cf_space, use_sso, cf_passcode, cf_user, cf_pass, dest_creds,
-                protected, method)
+    dbusy = job_running("deploy")
+    if st.button("⏳ Deploying…" if dbusy else f"🚀 Deploy to {env_cfg.get('label', env_key)}", type="primary",
+                 use_container_width=True, disabled=bool(dbusy) or not (gate_ok and cf_org and cf_space and creds_ok)
+                 or bool(protected and missing)):
+        _deploy(files, meta, cf_api, cf_org, cf_space, dest_creds, protected, method, env_key)
 
+    if st.session_state.get("deploy_log_text"):
+        with st.expander("Deployment log", expanded=not st.session_state.deployed_url):
+            st.code(st.session_state["deploy_log_text"][-12000:], language="text")
     if st.session_state.deployed_url:
         st.success(f"Live at [{st.session_state.deployed_url}]({st.session_state.deployed_url})")
     _logs_box(cf_api, cf_org, cf_space)
     nav_buttons(back=3)
+
+
+def _release_panel():
+    """Environment + saved version + approval + validation gate. Returns (may deploy, env key, env config)."""
+    envs = ac.environments()
+    keys = list(envs)
+    env_key = st.segmented_control(
+        "Environment", keys, default=keys[0], key="dep_env",
+        format_func=lambda k: envs[k]["label"] + ("" if envs[k].get("configured") else " · not configured")) or keys[0]
+    cfg = envs[env_key]
+    proj = current_project()
+    with st.container(border=True):
+        c1, c2 = st.columns([1.4, 1])
+        with c1:
+            st.markdown(f"**Release to {cfg['label']}**")
+            rules = (["approved version"] if cfg.get("requires_approval") else []) + \
+                    (["validation run without blocking failures"] if cfg.get("requires_validation") else [])
+            st.caption("Requires: " + (", ".join(rules) if rules else "the deploy permission only")
+                       + ("" if cfg.get("configured") else " · ⚠️ no CF space configured for this environment "
+                          "(STUDIO_ENVIRONMENTS)"))
+        with c2:
+            if files_saved():
+                v = STORE.get_version(st.session_state["version_id"], with_files=False)
+                st.markdown(ui.chip(f"Version {v['number']}", "accent") + ui.chip(proj["name"] if proj else ""),
+                            unsafe_allow_html=True)
+            elif st.button("💾 Save as new version", use_container_width=True,
+                           disabled=not ac.can(USER, "version.save", proj, STORE)):
+                save_version("Release candidate")
+                st.rerun()
+            else:
+                st.caption("Unsaved changes — save a version to release it.")
+        vid = st.session_state.get("version_id") if files_saved() else None
+        if cfg.get("requires_approval") and vid and proj:
+            _approval_box(proj, vid, env_key, cfg)
+        ok, reasons = ac.check_deploy(USER, env_key, proj["id"] if proj else "", vid, STORE,
+                                      st.session_state.get("validation_report"))
+        if ok:
+            st.markdown(ui.chip("Release gate passed", "ok"), unsafe_allow_html=True)
+        else:
+            st.markdown(ui.chip("Release blocked", "bad") + "<br>" + "<br>".join(f"• {r}" for r in reasons),
+                        unsafe_allow_html=True)
+    return ok, env_key, cfg
+
+
+def _approval_box(proj, vid, env_key, cfg):
+    appr = STORE.approval_for(proj["id"], vid, env_key)
+    status = (appr or {}).get("status")
+    if status == "approved":
+        st.markdown(ui.chip("Approved", "ok") + f" by {appr.get('decided_by')} — {appr.get('comment') or ''}",
+                    unsafe_allow_html=True)
+        return
+    if status == "pending":
+        st.markdown(ui.chip("Awaiting approval", "warn") + f" requested by {appr.get('requester')}"
+                    + (f" — {appr.get('note')}" if appr.get("note") else ""), unsafe_allow_html=True)
+        if ac.can(USER, "approval.decide", proj, STORE) and appr.get("requester") != USER.id:
+            cm = st.text_input("Decision comment", key=f"appr_cm_{appr['id']}")
+            a1, a2 = st.columns(2)
+            for col, approve, lab in ((a1, True, "✅ Approve release"), (a2, False, "❌ Reject")):
+                if col.button(lab, key=f"appr_{approve}_{appr['id']}", use_container_width=True):
+                    try:
+                        STORE.decide_approval(appr["id"], USER, approve, cm)
+                        st.rerun()
+                    except (PermissionError, ValueError) as e:
+                        st.error(str(e))
+        else:
+            st.caption("A reviewer (not the requester or the version's author) decides in Projects → Approvals.")
+        return
+    if status == "rejected":
+        st.markdown(ui.chip("Rejected", "bad") + f" by {appr.get('decided_by')}: {appr.get('comment') or ''}",
+                    unsafe_allow_html=True)
+    if ac.can(USER, "approval.request", proj, STORE):
+        note = st.text_input("Note for the reviewer", key=f"appr_note_{vid}_{env_key}",
+                             placeholder="What changed, what was tested…")
+        if st.button(f"📨 Request approval for {cfg['label']}", key=f"appr_req_{vid}_{env_key}"):
+            STORE.request_approval(proj["id"], vid, env_key, USER, note)
+            st.rerun()
 
 
 def _qv_view(files):
@@ -1386,11 +2040,10 @@ def _host_root(u: str) -> str:
     return m.group(1) if m else ""
 
 
-def _deploy(files, meta, cf_api, cf_org, cf_space, use_sso, cf_passcode, cf_user, cf_pass, dest_creds,
-            protected, method):
+def _deploy(files, meta, cf_api, cf_org, cf_space, dest_creds, protected, method, env_key):
+    """Checks that need the page (CLI, quality gate), then the deployment as a background job."""
     import quality_validator as _qv
     deployer = CFDeployer(api_url=cf_api, org=cf_org, space=cf_space, cf_home=_cf_home())
-    app_id = meta.get("app_id") or "fiori-app"
     if not deployer.check_cf_cli():
         st.warning("The Cloud Foundry CLI is not available here. Download the project and deploy from a machine "
                    "where you are logged in with `cf login`.")
@@ -1405,22 +2058,35 @@ def _deploy(files, meta, cf_api, cf_org, cf_space, use_sso, cf_passcode, cf_user
             if f["severity"] == "error":
                 st.markdown(f"- ❌ {f['message']}" + (f" `{f['file']}`" if f["file"] else ""))
         return
-    log_area = st.empty()
+    st.session_state.pop("deploy_log_text", None)
+    start_job("deploy", f"Deploying {meta.get('app_id') or 'the app'} to {env_key}", _w_deploy, dict(files),
+              dict(st.session_state.get("raw_binary") or {}) if st.session_state.get("files_raw") else None,
+              meta, cf_api, cf_org, cf_space, _cf_home(), dest_creds, protected, method,
+              extra={"env": env_key, "target": {"api": cf_api, "org": cf_org, "space": cf_space,
+                                                 "app": meta.get("app_id")}})
+
+
+def _w_deploy(say, files, raw_binary, meta, cf_api, cf_org, cf_space, cf_home, dest_creds, protected, method):
+    """Background deployment. Returns {"status": succeeded|failed|skipped, "url", "log", "app_id"}."""
+    deployer = CFDeployer(api_url=cf_api, org=cf_org, space=cf_space, cf_home=cf_home)
+    app_id = meta.get("app_id") or "fiori-app"
     logs = []
 
     def log(line):
         logs.append(str(line))
-        log_area.markdown('<div class="ev-log">' + "<br>".join(l.replace("<", "&lt;") for l in logs[-60:]) + "</div>",
-                          unsafe_allow_html=True)
+        say(line)
+
+    def done(status, url=""):
+        return {"status": status, "url": url, "log": "\n".join(logs), "app_id": app_id}
 
     with tempfile.TemporaryDirectory() as tmp:
-        if st.session_state.get("files_raw"):        # imported project: paths are already final
+        if raw_binary is not None:                 # imported project: paths are already final
             for p, c in files.items():
                 fp = os.path.join(tmp, p)
                 os.makedirs(os.path.dirname(fp) or tmp, exist_ok=True)
                 with open(fp, "w", encoding="utf-8") as fh:
                     fh.write(c)
-            for p, c in (st.session_state.get("raw_binary") or {}).items():
+            for p, c in raw_binary.items():
                 fp = os.path.join(tmp, p)
                 os.makedirs(os.path.dirname(fp) or tmp, exist_ok=True)
                 with open(fp, "wb") as fh:
@@ -1431,18 +2097,17 @@ def _deploy(files, meta, cf_api, cf_org, cf_space, use_sso, cf_passcode, cf_user
         mta_disk = open(os.path.join(tmp, "mta.yaml")).read() if os.path.exists(os.path.join(tmp, "mta.yaml")) else ""
         if protected and ("resources:" not in mta_disk or "requires:" not in mta_disk):
             log("❌ mta.yaml on disk has no resources/requires — regenerate the app.")
-            return
+            return done("failed")
         for line in deployer.target():
             log(line)
         if not deployer.is_logged_in():
-            log("❌ The Cloud Foundry session has expired — sign in again above.")
-            st.error("Not signed in to Cloud Foundry.")
-            return
+            log("❌ The Cloud Foundry session has expired — sign in again in step 5.")
+            return done("skipped")
         log(f"✅ Signed in as {deployer.whoami()}")
         if method.startswith("MTA"):
-            if protected and not deployer.check_multiapps_plugin():
+            if (protected or meta.get("standalone")) and not deployer.check_multiapps_plugin():
                 log("❌ CF multiapps plugin missing (cf install-plugin multiapps).")
-                return
+                return done("failed")
             ext = None
             if protected:
                 svc = [ODataService(id=m["id"], url=dest_creds.get(m["id"], {}).get("url", "") or m.get("url", ""),
@@ -1459,12 +2124,28 @@ def _deploy(files, meta, cf_api, cf_org, cf_space, use_sso, cf_passcode, cf_user
         else:
             for line in deployer.cf_push(tmp, app_id):
                 log(line)
-        st.session_state["deployed_app"] = app_id
         url = deployer.get_app_url(app_id)
         if url:
-            st.session_state.deployed_url = url
             log(f"🌐 {url}")
-            st.balloons()
+        return done("succeeded" if url else "failed", url or "")
+
+
+def _apply_deploy(job):
+    r = job.result
+    st.session_state["deploy_log_text"] = r["log"]
+    if r["status"] == "skipped":
+        st.session_state["_job_error"] = "Deployment skipped: " + (r["log"].splitlines() or [""])[-1]
+        return
+    st.session_state["deployed_app"] = r["app_id"]
+    if r["url"]:
+        st.session_state.deployed_url = r["url"]
+        st.session_state["_job_done"] = f"Deployed — live at {r['url']}"
+    else:
+        st.session_state["_job_error"] = "Deployment failed — see the deployment log in step 5."
+    if st.session_state.get("project_id"):
+        STORE.record_deployment(st.session_state["project_id"], job.context["state"].get("version_id"),
+                                job.context.get("env", "dev"), job.context.get("target") or {}, USER, r["status"],
+                                app_url=r["url"] or "", log_tail=r["log"])
 
 
 def _logs_box(cf_api, cf_org, cf_space):
@@ -1483,8 +2164,182 @@ def _logs_box(cf_api, cf_org, cf_space):
                 st.error(text)
 
 
+_JOB_APPLY = {"questions": _apply_questions, "domain": _apply_domain, "design": _apply_design,
+              "generate": _apply_generate, "validate": _apply_validate, "deploy": _apply_deploy}
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# PROJECTS — persistent workspace, versions, approvals, audit
+# ══════════════════════════════════════════════════════════════════════════════
+def _ts(t) -> str:
+    return time.strftime("%d %b %Y %H:%M", time.localtime(t)) if t else ""
+
+
+def page_projects():
+    st.markdown(ui.header("Workspace", "Projects",
+                          "Every generated app is saved as a project with its prompt, design, files, validation "
+                          "results, approvals and deployments — restore, compare, duplicate or export any version."),
+                unsafe_allow_html=True)
+    if not STORE.durable:
+        st.warning(STORE.durability_note, icon="⚠️")
+    pend = STORE.list_approvals("pending", user=USER)
+    t_proj, t_appr, t_audit = st.tabs(["📁  Projects", f"📨  Approvals ({len(pend)})", "🧾  Audit log"])
+    with t_proj:
+        _projects_tab()
+    with t_appr:
+        _approvals_tab(pend)
+    with t_audit:
+        rows = STORE.list_audit(None if ac.can(USER, "project.view_all") else st.session_state.get("project_id"), 300)
+        st.dataframe([{"When": _ts(a["at"]), "User": a["user"], "Action": a["action"],
+                       "Project": a.get("project_id", "")[:8], "Detail": json.dumps(a.get("detail") or {})[:160]}
+                      for a in rows], hide_index=True, use_container_width=True, height=420)
+
+
+def _projects_tab():
+    see_all = ac.can(USER, "project.view_all")
+    c1, c2 = st.columns([3, 1])
+    archived = c2.toggle("Show archived", key="pj_arch")
+    projects = STORE.list_projects(USER, include_archived=archived, see_all=see_all)
+    with c1:
+        with st.popover("⬆ Import project (.zip)"):
+            up = st.file_uploader("Workspace export", type=["zip"], key="pj_import")
+            if up is not None and st.button("Import", type="primary", disabled=not ac.can(USER, "project.create")):
+                try:
+                    p = STORE.import_project(up.getvalue(), USER)
+                    st.session_state["pj_sel"] = p["id"]
+                    st.rerun()
+                except Exception as e:  # noqa: BLE001
+                    st.error(f"Import failed: {e}")
+    if not projects:
+        st.info("No projects yet — generate an app and it is saved here automatically.")
+        return
+    ids = [p["id"] for p in projects]
+    by_id = {p["id"]: p for p in projects}
+    default = st.session_state.get("pj_sel") or st.session_state.get("project_id")
+    sel = st.selectbox("Project", ids, index=ids.index(default) if default in ids else 0, key="pj_sel_box",
+                       format_func=lambda i: f"{by_id[i]['name']} · {by_id[i]['mode']} · owner {by_id[i]['owner']}"
+                                             + (" · archived" if by_id[i]["archived"] else ""))
+    p = STORE.get_project(sel)
+    can_edit = ac.can(USER, "project.edit", p, STORE)
+    versions = STORE.list_versions(sel)
+    st.markdown(ui.metrics([("Versions", len(versions), f"updated {_ts(p['updated_at'])}", True),
+                            ("Mode", p["mode"], p.get("app_id") or ""),
+                            ("Your role", STORE.project_role(sel, USER) or ", ".join(sorted(USER.roles)), ""),
+                            ("Deployments", len(STORE.list_deployments(sel)), "")]), unsafe_allow_html=True)
+    if p.get("description"):
+        st.caption(p["description"])
+    vt, ct, dt, mt = st.tabs(["Versions", "Compare", "Deployments", "Settings & members"])
+    with vt:
+        for v in versions[:15]:
+            val = v.get("validation") or {}
+            vs = ("validation blocked" if val.get("blocking") else "validated") if val else "not validated"
+            a, b, c = st.columns([4, 1, 1])
+            a.markdown(f"**v{v['number']}** {v['label'] or ''} · {v['file_count']} files · {v['author']} · "
+                       f"{_ts(v['created_at'])} · {vs}")
+            if b.button("Restore", key=f"pj_rs_{v['id']}", use_container_width=True):
+                restore_version(v["id"])
+                st.rerun()
+            vf = STORE.get_version(v["id"], with_files=True)
+            c.download_button("ZIP", data=create_zip_archive(vf["files"], app_name="fiori_app") if vf["files"] else b"",
+                              file_name=f"{p.get('app_id') or 'app'}-v{v['number']}.zip", key=f"pj_zip_{v['id']}",
+                              use_container_width=True, disabled=not vf["files"])
+    with ct:
+        if len(versions) < 2:
+            st.caption("Two versions are needed for a comparison.")
+        else:
+            lab = {v["id"]: f"v{v['number']} {v['label'] or ''}" for v in versions}
+            x1, x2 = st.columns(2)
+            va = x1.selectbox("From", list(lab), index=1, format_func=lab.get, key="pj_cmp_a")
+            vb = x2.selectbox("To", list(lab), index=0, format_func=lab.get, key="pj_cmp_b")
+            if va != vb:
+                cmp = STORE.compare_versions(va, vb)
+                st.markdown(f"**{len(cmp['added'])} added · {len(cmp['removed'])} removed · {len(cmp['changed'])} changed**")
+                for ch in cmp.get("blueprint_changes") or []:
+                    st.markdown(f"- {ch}")
+                st.code(cmp["diff"] or "(no file differences)", language="diff", height=380)
+    with dt:
+        deps = STORE.list_deployments(sel)
+        if not deps:
+            st.caption("Not deployed yet.")
+        st.dataframe([{"When": _ts(d["at"]), "Env": d["env"], "Version": d.get("version_number"), "By": d["user"],
+                       "Status": d["status"], "URL": d.get("app_url", ""),
+                       "Space": (d.get("target") or {}).get("space", "")} for d in deps],
+                     hide_index=True, use_container_width=True)
+    with mt:
+        n1, n2 = st.columns([3, 1])
+        new_name = n1.text_input("Name", value=p["name"], key=f"pj_name_{sel}", disabled=not can_edit)
+        if n2.button("Rename", disabled=not can_edit or new_name.strip() == p["name"], use_container_width=True):
+            STORE.rename_project(sel, new_name, USER)
+            st.rerun()
+        d1, d2, d3 = st.columns(3)
+        if d1.button("⧉ Duplicate", use_container_width=True, disabled=not ac.can(USER, "project.create")):
+            np_ = STORE.duplicate_project(sel, p["name"] + " (copy)", USER)
+            st.session_state["pj_sel"] = np_["id"]
+            st.rerun()
+        d2.download_button("⬇ Export (.zip)", data=STORE.export_project(sel, USER), use_container_width=True,
+                           file_name=f"{re.sub(r'[^A-Za-z0-9_-]+', '_', p['name'])}-workspace.zip")
+        if d3.button("Unarchive" if p["archived"] else "Archive", use_container_width=True, disabled=not can_edit):
+            STORE.archive_project(sel, USER, not p["archived"])
+            st.rerun()
+        st.markdown("**Members**")
+        for m in p.get("members") or []:
+            st.markdown(f"- {m['user']} — {m['role']}")
+        if can_edit:
+            m1, m2, m3 = st.columns([2.2, 1.2, 1])
+            mu = m1.text_input("User (e-mail)", key=f"pj_mu_{sel}")
+            mr = m2.selectbox("Role", ["developer", "reviewer", "viewer"], key=f"pj_mr_{sel}")
+            if m3.button("Add", use_container_width=True, disabled=not (mu or "").strip()):
+                STORE.add_member(sel, mu.strip().lower(), mr, by=USER)
+                st.rerun()
+
+
+def _approvals_tab(pend):
+    if not ac.can(USER, "approval.decide"):
+        st.caption("Only reviewers decide release approvals. Your own requests:")
+        pend = [a for a in STORE.list_approvals("pending") if a.get("requester") == USER.id]
+    if not pend:
+        st.info("No pending approvals.")
+    for a in pend:
+        p = STORE.get_project(a["project_id"]) or {}
+        v = STORE.get_version(a["version_id"], with_files=False) or {}
+        val = v.get("validation") or {}
+        with st.container(border=True):
+            st.markdown(f"**{p.get('name', '?')}** v{v.get('number', '?')} → **{a['env']}** · requested by "
+                        f"{a['requester']} · {_ts(a.get('requested_at'))}")
+            if a.get("note"):
+                st.caption(a["note"])
+            st.caption(("Validation: " + ("BLOCKED — " + "; ".join(val.get("blocking") or []) if val.get("blocking")
+                                          else f"{(val.get('summary') or {}).get('passed', 0)} passed, "
+                                               f"{(val.get('summary') or {}).get('not_tested', 0)} not tested"))
+                       if val else "Validation: not run for this version")
+            if ac.can(USER, "approval.decide") and a["requester"] != USER.id:
+                cm = st.text_input("Comment", key=f"ap_cm_{a['id']}")
+                b1, b2, b3 = st.columns([1, 1, 2])
+                if b1.button("✅ Approve", key=f"ap_ok_{a['id']}", use_container_width=True):
+                    try:
+                        STORE.decide_approval(a["id"], USER, True, cm)
+                        st.rerun()
+                    except (PermissionError, ValueError) as e:
+                        st.error(str(e))
+                if b2.button("❌ Reject", key=f"ap_no_{a['id']}", use_container_width=True):
+                    try:
+                        STORE.decide_approval(a["id"], USER, False, cm)
+                        st.rerun()
+                    except (PermissionError, ValueError) as e:
+                        st.error(str(e))
+                if b3.button("Open this version", key=f"ap_open_{a['id']}"):
+                    restore_version(a["version_id"])
+                    st.rerun()
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 if "_bp_json_next" in st.session_state:          # programmatic update of the JSON editor
     st.session_state["bp_json"] = st.session_state.pop("_bp_json_next")
 
-[step_connect, step_describe, step_review, step_build, step_deploy][STEP]()
+with _JOB_SLOT:
+    jobs_panel()
+
+if st.session_state.get("view") == "projects":
+    page_projects()
+else:
+    [step_connect, step_describe, step_review, step_build, step_deploy][STEP]()

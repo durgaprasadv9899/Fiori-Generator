@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="icon" type="image/png" href="./evoke_logo.png" />
+    <title>Evoke Fiori App Studio</title>
+    <script>
+      // start UI5 directly in the saved theme (no light flash when dark mode is on)
+      (function () {
+        var dark = false;
+        try { dark = localStorage.getItem("evoke.theme") === "dark"; } catch (e) {}
+        var cfg = document.createElement("script");
+        cfg.type = "application/json";
+        cfg.setAttribute("data-ui5-config", "");
+        cfg.textContent = JSON.stringify({ theme: dark ? "sap_horizon_dark" : "sap_horizon" });
+        document.head.appendChild(cfg);
+        document.documentElement.dataset.theme = dark ? "dark" : "light";
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

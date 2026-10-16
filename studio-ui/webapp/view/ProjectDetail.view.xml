@@ -1,0 +1,104 @@
+<mvc:View controllerName="com.evoke.studio.controller.ProjectDetail"
+    xmlns:mvc="sap.ui.core.mvc" xmlns="sap.m" xmlns:f="sap.f" xmlns:layout="sap.ui.layout" height="100%">
+    <f:DynamicPage id="projectPage" headerExpanded="true" busy="{detail>/busy}">
+        <f:title>
+            <f:DynamicPageTitle>
+                <f:breadcrumbs>
+                    <Breadcrumbs currentLocationText="{detail>/project/name}">
+                        <Link text="{i18n>projectsTitle}" press=".onBack"/>
+                    </Breadcrumbs>
+                </f:breadcrumbs>
+                <f:heading><Title text="{detail>/project/name}" level="H2" wrapping="true"/></f:heading>
+                <f:expandedContent>
+                    <ObjectStatus text="{path: 'detail>/project/mode', formatter: '.fmt.modeText'}"
+                                  state="{path: 'detail>/project/mode', formatter: '.fmt.modeState'}"/>
+                </f:expandedContent>
+                <f:actions>
+                    <Button text="{i18n>openInStudio}" icon="sap-icon://edit" type="Emphasized" press=".onOpenLatest"
+                            enabled="{= ${detail>/versions}.length > 0 }"/>
+                </f:actions>
+            </f:DynamicPageTitle>
+        </f:title>
+        <f:header>
+            <f:DynamicPageHeader pinnable="false">
+                <layout:HorizontalLayout allowWrapping="true">
+                    <layout:VerticalLayout class="sapUiMediumMarginEnd">
+                        <ObjectAttribute title="App ID" text="{detail>/project/app_id}"/>
+                        <ObjectAttribute title="Owner" text="{detail>/project/owner}"/>
+                    </layout:VerticalLayout>
+                    <layout:VerticalLayout class="sapUiMediumMarginEnd">
+                        <ObjectAttribute title="Updated" text="{path: 'detail>/project/updated_at', formatter: '.fmt.date'}"/>
+                        <ObjectAttribute title="Versions" text="{= ${detail>/versions}.length + '' }"/>
+                    </layout:VerticalLayout>
+                    <layout:VerticalLayout>
+                        <Text text="{detail>/project/description}" maxLines="3" width="28rem" class="evMuted"/>
+                    </layout:VerticalLayout>
+                </layout:HorizontalLayout>
+            </f:DynamicPageHeader>
+        </f:header>
+        <f:content>
+            <VBox>
+                <Table id="versionsTable" items="{detail>/versions}" noDataText="No versions yet."
+                       sticky="ColumnHeaders" class="sapUiSmallMarginBottom">
+                    <headerToolbar>
+                        <OverflowToolbar><Title text="{i18n>versions}" level="H3"/></OverflowToolbar>
+                    </headerToolbar>
+                    <columns>
+                        <Column width="6rem"><Text text="{i18n>colNumber}"/></Column>
+                        <Column minScreenWidth="Tablet" demandPopin="true"><Text text="{i18n>colAuthor}"/></Column>
+                        <Column minScreenWidth="Tablet" demandPopin="true"><Text text="{i18n>colDate}"/></Column>
+                        <Column hAlign="End" minScreenWidth="Desktop" demandPopin="true"><Text text="{i18n>colFiles}"/></Column>
+                        <Column><Text text="{i18n>colValidation}"/></Column>
+                        <Column hAlign="End" width="21rem"><Text text=""/></Column>
+                    </columns>
+                    <items>
+                        <ColumnListItem>
+                            <cells>
+                                <ObjectIdentifier title="{= 'v' + ${detail>number} }" text="{detail>label}"/>
+                                <Text text="{detail>author}"/>
+                                <Text text="{path: 'detail>created_at', formatter: '.fmt.date'}"/>
+                                <ObjectNumber number="{detail>file_count}"/>
+                                <ObjectStatus text="{path: 'detail>validation', formatter: '.fmt.validationText'}"
+                                              state="{path: 'detail>validation', formatter: '.fmt.validationState'}"/>
+                                <HBox justifyContent="End" wrap="Wrap">
+                                    <Button text="{i18n>browseFiles}" icon="sap-icon://documents" type="Transparent"
+                                            press=".onBrowse"/>
+                                    <Button text="ZIP" icon="sap-icon://download" type="Transparent" press=".onDownload"
+                                            tooltip="{i18n>downloadZip}"/>
+                                    <Button text="{i18n>openInStudio}" icon="sap-icon://edit" type="Transparent"
+                                            press=".onOpenVersion"/>
+                                </HBox>
+                            </cells>
+                        </ColumnListItem>
+                    </items>
+                </Table>
+                <Table items="{detail>/deployments}" noDataText="Not deployed yet." visible="{= ${detail>/deployments}.length > 0 }">
+                    <headerToolbar>
+                        <OverflowToolbar><Title text="{i18n>deployments}" level="H3"/></OverflowToolbar>
+                    </headerToolbar>
+                    <columns>
+                        <Column><Text text="When"/></Column>
+                        <Column><Text text="Environment"/></Column>
+                        <Column minScreenWidth="Tablet" demandPopin="true"><Text text="Version"/></Column>
+                        <Column minScreenWidth="Tablet" demandPopin="true"><Text text="By"/></Column>
+                        <Column><Text text="Status"/></Column>
+                        <Column minScreenWidth="Desktop" demandPopin="true"><Text text="URL"/></Column>
+                    </columns>
+                    <items>
+                        <ColumnListItem>
+                            <cells>
+                                <Text text="{path: 'detail>at', formatter: '.fmt.date'}"/>
+                                <Text text="{detail>env}"/>
+                                <Text text="{= ${detail>version_number} ? 'v' + ${detail>version_number} : '-' }"/>
+                                <Text text="{detail>user}"/>
+                                <ObjectStatus text="{path: 'detail>status', formatter: '.fmt.statusText'}"
+                                              state="{path: 'detail>status', formatter: '.fmt.statusState'}"/>
+                                <Link text="{detail>app_url}" href="{detail>app_url}" target="_blank"/>
+                            </cells>
+                        </ColumnListItem>
+                    </items>
+                </Table>
+            </VBox>
+        </f:content>
+    </f:DynamicPage>
+</mvc:View>

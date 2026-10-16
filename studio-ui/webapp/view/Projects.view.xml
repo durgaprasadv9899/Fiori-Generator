@@ -1,0 +1,56 @@
+<mvc:View controllerName="com.evoke.studio.controller.Projects"
+    xmlns:mvc="sap.ui.core.mvc" xmlns="sap.m" xmlns:f="sap.f" height="100%">
+    <f:DynamicPage id="projectsPage" headerExpanded="true" showFooter="false" class="sapUiNoContentPadding">
+        <f:title>
+            <f:DynamicPageTitle>
+                <f:heading><Title text="{i18n>projectsTitle}" level="H2"/></f:heading>
+                <f:expandedContent><Text text="{i18n>projectsSubtitle}" class="evMuted"/></f:expandedContent>
+                <f:actions>
+                    <Button id="btnRefreshProjects" icon="sap-icon://refresh" type="Transparent" press=".load"
+                            tooltip="Refresh"/>
+                    <Button id="btnNewApp" text="{i18n>newApplication}" icon="sap-icon://add" type="Emphasized"
+                            press=".onNewApp"/>
+                </f:actions>
+            </f:DynamicPageTitle>
+        </f:title>
+        <f:header>
+            <f:DynamicPageHeader pinnable="false">
+                <MessageStrip text="{me>/store/note}" type="Warning" showIcon="true" visible="{= !!${me>/store/note} }"
+                              class="sapUiTinyMarginBottom"/>
+            </f:DynamicPageHeader>
+        </f:header>
+        <f:content>
+            <Table id="projectsTable" items="{path: 'projects>/projects', sorter: {path: 'updated_at', descending: true}}"
+                   busy="{projects>/busy}" growing="true" growingThreshold="25" sticky="ColumnHeaders,HeaderToolbar"
+                   noDataText="{i18n>noProjects}" mode="None" class="sapUiResponsiveContentPadding">
+                <headerToolbar>
+                    <OverflowToolbar>
+                        <Title text="{= 'Projects (' + ${projects>/projects}.length + ')' }" level="H3"/>
+                        <ToolbarSpacer/>
+                        <SearchField id="projectSearch" width="18rem" placeholder="{i18n>searchProjects}"
+                                     liveChange=".onSearch"/>
+                    </OverflowToolbar>
+                </headerToolbar>
+                <columns>
+                    <Column width="34%"><Text text="{i18n>colName}"/></Column>
+                    <Column minScreenWidth="Tablet" demandPopin="true"><Text text="{i18n>colMode}"/></Column>
+                    <Column minScreenWidth="Desktop" demandPopin="true"><Text text="{i18n>colOwner}"/></Column>
+                    <Column hAlign="End" minScreenWidth="Tablet" demandPopin="true"><Text text="{i18n>colVersion}"/></Column>
+                    <Column hAlign="End"><Text text="{i18n>colUpdated}"/></Column>
+                </columns>
+                <items>
+                    <ColumnListItem type="Navigation" press=".onOpen">
+                        <cells>
+                            <ObjectIdentifier title="{projects>name}" text="{projects>app_id}"/>
+                            <ObjectStatus text="{path: 'projects>mode', formatter: '.fmt.modeText'}"
+                                          state="{path: 'projects>mode', formatter: '.fmt.modeState'}"/>
+                            <Text text="{projects>owner}"/>
+                            <ObjectNumber number="{= ${projects>latest_version} ? 'v' + ${projects>latest_version} : '-' }"/>
+                            <Text text="{path: 'projects>updated_at', formatter: '.fmt.date'}"/>
+                        </cells>
+                    </ColumnListItem>
+                </items>
+            </Table>
+        </f:content>
+    </f:DynamicPage>
+</mvc:View>

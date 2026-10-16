@@ -9,6 +9,10 @@ applications:
     services:
       - evokesd4-destination-service
       - fiori-generator-connectivity
+      # XSUAA: the studio verifies the BTP login forwarded by the approuter evoke-fiori-studio
+      - evoke-fiori-studio-xsuaa
+      # SAP HANA Cloud schema: persistent workspace (projects, versions, approvals, audit)
+      - evoke-studio-workspace
     # Start: make the vendored Linux cf/mbt executable, register the
     # multiapps plugin (provides `cf deploy`) into an in-app plugin home, then
     # run the generator. See scripts/vendor_cli.sh.
@@ -24,6 +28,7 @@ applications:
       --server.headless=true
       --server.enableCORS=false
       --server.enableXsrfProtection=false
+      --server.baseUrlPath=classic
     env:
       STREAMLIT_SERVER_HEADLESS: "true"
       # AI Core credentials — set with `cf set-env`, do NOT commit real values.

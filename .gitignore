@@ -20,3 +20,8 @@ generated/
 *.mtar
 mta_archives/
 node_modules/
+
+# Frontend build output (npm run build in studio-web, then copy dist -> studio-approuter/resources)
+studio-web/dist/
+studio-approuter/resources/
+*.tsbuildinfo

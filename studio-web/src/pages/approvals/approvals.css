@@ -1,0 +1,17 @@
+.ev-appr-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 1rem; }
+.ev-appr-banner { display: flex; align-items: center; gap: .6rem; padding: .75rem 1rem; border-radius: 12px; margin-bottom: 1rem; font-weight: 600;
+  background: color-mix(in srgb, var(--sapCriticalColor) 13%, transparent); color: var(--sapCriticalTextColor, var(--sapCriticalColor)); }
+.ev-appr-banner ui5-icon { color: inherit; }
+.ev-appr-card { border-radius: 16px; padding: 1.05rem 1.1rem; display: grid; gap: .65rem; background: var(--sapTile_Background); border: 1px solid var(--sapTile_BorderColor);
+  box-shadow: var(--ev-shadow); border-top: 4px solid var(--sapNeutralColor); }
+.ev-appr-card.st-pending { border-top-color: var(--sapCriticalColor); }
+.ev-appr-card.st-approved { border-top-color: var(--sapPositiveColor); }
+.ev-appr-card.st-rejected { border-top-color: var(--sapNegativeColor); }
+.ev-appr-card__top { display: flex; justify-content: space-between; gap: .6rem; align-items: flex-start; }
+.ev-appr-card__proj { font-weight: 800; font-size: 1rem; cursor: pointer; }
+.ev-appr-card__proj:hover { color: var(--sapLinkColor); }
+.ev-appr-card__who { display: flex; align-items: center; gap: .5rem; font-size: .84rem; }
+.ev-appr-card__note { font-size: .86rem; font-style: italic; padding: .55rem .7rem; border-radius: 10px; background: var(--sapBackgroundColor); }
+.ev-appr-card__val { display: flex; gap: .35rem; flex-wrap: wrap; }
+.ev-appr-card__dec { font-size: .82rem; color: var(--sapContent_LabelColor); }
+.ev-appr-card__acts { display: flex; gap: .4rem; justify-content: flex-end; align-items: center; border-top: 1px solid var(--sapList_BorderColor); padding-top: .65rem; flex-wrap: wrap; }

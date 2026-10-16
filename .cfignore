@@ -10,3 +10,8 @@ profiles/
 vcap_services.json
 .env
 .venv/
+studio-approuter/
+studio-web/
+studio-ui/
+docs/
+node_modules/

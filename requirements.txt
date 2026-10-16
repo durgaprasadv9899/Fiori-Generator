@@ -13,3 +13,8 @@ lxml
 pydantic
 python-dotenv
 pyyaml
+hdbcli
+# studio API (studio_api.py) for the React/UI5 studio
+fastapi
+uvicorn
+python-multipart

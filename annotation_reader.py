@@ -249,6 +249,14 @@ def enrich_model_with_annotations(model: Dict, edmx_text: str) -> Dict:
                     p["updatable"] = p["creatable"] = False
             if facts["apply_supported"]:
                 es["aggregatable"] = True
+            # Explicit Capabilities restrictions on exactly this set (ns.Container/Set)
+            # switch the set's CRUD flags off, e.g. a read-only approval history.
+            for target, bucket in v4_map.items():
+                if target.split("/")[-1] == es["name"] and "/" in target and "." in target.split("/")[0]:
+                    for cap, flag in (("insertable", "creatable"), ("updatable", "updatable"),
+                                      ("deletable", "deletable")):
+                        if bucket["capabilities"].get(cap) is False:
+                            es[flag] = False
             # V4: annotations targeted at "ns.Type" or "ns.EntityContainer/Set"
             for target, bucket in v4_map.items():
                 tail = target.split(".")[-1]

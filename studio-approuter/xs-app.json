@@ -1,0 +1,14 @@
+{
+  "authenticationMethod": "route",
+  "welcomeFile": "/index.html",
+  "websockets": { "enabled": true },
+  "logout": { "logoutEndpoint": "/do/logout", "logoutPage": "/logout.html" },
+  "routes": [
+    { "source": "^/logout\\.html$", "target": "logout.html", "localDir": "resources", "authenticationType": "none" },
+    { "source": "^/evoke_logo\\.png$", "target": "evoke_logo.png", "localDir": "resources", "authenticationType": "none" },
+    { "source": "^/api/(.*)$", "target": "/api/$1", "destination": "studio-api", "authenticationType": "xsuaa", "csrfProtection": false },
+    { "source": "^/classic/(.*)$", "target": "/classic/$1", "destination": "studio", "authenticationType": "xsuaa", "csrfProtection": false },
+    { "source": "^/classic$", "target": "/classic/", "destination": "studio", "authenticationType": "xsuaa", "csrfProtection": false },
+    { "source": "^/(.*)$", "target": "$1", "localDir": "resources", "authenticationType": "xsuaa", "cacheControl": "no-cache" }
+  ]
+}

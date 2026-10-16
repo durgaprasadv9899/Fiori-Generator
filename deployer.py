@@ -460,7 +460,21 @@ class CFDeployer:
 
 # Module types as the MTA deployer expects them in mtad.yaml (what mbt maps).
 _MTAD_MODULE_TYPES = {"approuter.nodejs": "javascript.nodejs", "nodejs": "javascript.nodejs",
-                      "html5": "javascript.nodejs"}
+                      "html5": "javascript.nodejs", "hdb": "com.sap.xs.hdi"}
+
+
+def _run_build_commands(root: Path, commands: list) -> None:
+    """mta.yaml build-parameters.before-all custom commands (e.g. `cds build` of a CAP
+    backend with SAP HANA). They need Node.js/npm on this host."""
+    import subprocess
+    if commands and not shutil.which("npm"):
+        raise RuntimeError("This project must be built with Node.js (its MTA runs: " + "; ".join(commands)
+                           + "). npm is not available on this host — download the project and run "
+                             "`mbt build` in SAP Business Application Studio, then `cf deploy`.")
+    for cmd in commands:
+        res = subprocess.run(cmd, cwd=str(root), shell=True, capture_output=True, text=True)
+        if res.returncode:
+            raise RuntimeError(f"Build step failed: {cmd}\n{(res.stderr or res.stdout)[-1500:]}")
 
 
 def build_mtar_python(project_dir: str, mtar_name: str = "app.mtar") -> str:
@@ -484,6 +498,8 @@ def build_mtar_python(project_dir: str, mtar_name: str = "app.mtar") -> str:
     manifest = ["manifest-Version: 1.0", "Created-By: Evoke Fiori Generator", ""]
     entries = {}
 
+    for step in ((mta.get("build-parameters") or {}).get("before-all") or []):
+        _run_build_commands(root, list(step.get("commands") or []))
     mods = []
     for m in mta.get("modules") or []:
         src = (root / (m.get("path") or ".")).resolve()
@@ -547,7 +563,7 @@ def write_project_to_disk(files: dict[str, str], base_dir: str) -> None:
                   "destinations.stub.json", "deploy.mtaext.example",
                   "ui5-mock.yaml", "README.md", "evoke-app.json")
     for filepath, content in files.items():
-        if filepath in root_files or filepath.startswith("approuter/"):
+        if filepath in root_files or filepath.startswith(("approuter/", "backend/")) or filepath == "ui5-cap.yaml":
             full_path = Path(base_dir) / filepath          # project root (or approuter/)
         else:
             full_path = Path(base_dir) / "webapp" / filepath

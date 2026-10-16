@@ -1,0 +1,10 @@
+applications:
+  - name: evoke-fiori-studio
+    memory: 256M
+    buildpacks: [nodejs_buildpack]
+    services: [evoke-fiori-studio-xsuaa]
+    env:
+      SESSION_TIMEOUT: 120
+      destinations: >
+        [{"name": "studio-api", "url": "https://evoke-studio-api.cfapps.us10-001.hana.ondemand.com", "forwardAuthToken": true, "timeout": 300000},
+         {"name": "studio", "url": "https://fiori-generator-poc.cfapps.us10-001.hana.ondemand.com", "forwardAuthToken": true}]

@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Signed out · Evoke Fiori App Studio</title>
+  <link rel="icon" type="image/png" href="./evoke_logo.png" />
+  <style>
+    :root { --bg: #f5f6f7; --card: #fff; --text: #1d2d3e; --muted: #556b82; --brand: #0070f2; }
+    @media (prefers-color-scheme: dark) { :root { --bg: #12171c; --card: #1d232a; --text: #eaecee; --muted: #a9b4be; --brand: #4db1ff; } }
+    html, body { height: 100%; margin: 0; }
+    body { font-family: "72", "72full", Arial, Helvetica, sans-serif; background: var(--bg); color: var(--text);
+      display: grid; place-items: center; padding: 1rem; box-sizing: border-box; }
+    .card { width: 420px; max-width: 100%; background: var(--card); border-radius: 20px; overflow: hidden;
+      box-shadow: 0 24px 64px rgba(0, 0, 0, .14); animation: up .45s cubic-bezier(.2, .8, .2, 1); }
+    .hero { background: linear-gradient(135deg, #2b1a6f 0%, #5a2bd8 45%, #0070f2 100%); padding: 2rem; text-align: center; }
+    .hero img { width: 56px; height: 56px; border-radius: 14px; background: #fff; padding: 6px; box-sizing: border-box; }
+    .check { width: 54px; height: 54px; margin: -27px auto 0; border-radius: 50%; background: var(--card); display: grid; place-items: center;
+      box-shadow: 0 6px 18px rgba(0, 0, 0, .15); }
+    .check svg { width: 28px; height: 28px; stroke: #30914c; stroke-width: 3; fill: none; stroke-dasharray: 30; stroke-dashoffset: 30;
+      animation: draw .5s .35s forwards; }
+    .body { padding: 1.2rem 2rem 2rem; text-align: center; }
+    h1 { font-size: 1.35rem; margin: .6rem 0 .4rem; }
+    p { color: var(--muted); line-height: 1.5; margin: 0 0 1.4rem; }
+    a.btn { display: inline-block; background: var(--brand); color: #fff; text-decoration: none; font-weight: 700;
+      padding: .7rem 1.4rem; border-radius: 10px; transition: transform .15s, box-shadow .15s; }
+    a.btn:hover { transform: translateY(-1px); box-shadow: 0 8px 20px rgba(0, 112, 242, .35); }
+    @keyframes up { from { opacity: 0; transform: translateY(16px) scale(.98); } to { opacity: 1; transform: none; } }
+    @keyframes draw { to { stroke-dashoffset: 0; } }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="hero"><img src="./evoke_logo.png" alt="Evoke" /></div>
+    <div class="check"><svg viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5" /></svg></div>
+    <div class="body">
+      <h1>You've been signed out</h1>
+      <p>Your session in the Evoke Fiori App Studio has ended. Your projects are saved in the workspace.</p>
+      <a class="btn" href="./">Sign in again</a>
+    </div>
+  </div>
+</body>
+</html>

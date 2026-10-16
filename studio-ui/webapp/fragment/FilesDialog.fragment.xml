@@ -1,0 +1,20 @@
+<core:FragmentDefinition xmlns="sap.m" xmlns:core="sap.ui.core" xmlns:layout="sap.ui.layout">
+    <Dialog id="filesDialog" title="{files>/title}" contentWidth="72rem" contentHeight="36rem" resizable="true"
+            draggable="true" stretch="{device>/isPhone}">
+        <layout:Splitter height="100%" width="100%">
+            <List items="{files>/files}" mode="SingleSelectMaster" selectionChange=".onFileSelect"
+                  busy="{files>/busy}" noDataText="No files.">
+                <layoutData><layout:SplitterLayoutData size="32%"/></layoutData>
+                <StandardListItem title="{files>path}" icon="sap-icon://document-text" wrapping="true"/>
+            </List>
+            <VBox height="100%" class="sapUiTinyMargin">
+                <Label text="{files>/path}" design="Bold"/>
+                <TextArea value="{files>/content}" editable="false" width="100%" height="32rem" class="evCode"
+                          placeholder="Select a file"/>
+            </VBox>
+        </layout:Splitter>
+        <endButton>
+            <Button text="Close" press=".onCloseFiles"/>
+        </endButton>
+    </Dialog>
+</core:FragmentDefinition>
