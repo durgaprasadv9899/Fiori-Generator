@@ -12,6 +12,5 @@ vcap_services.json
 .venv/
 studio-approuter/
 studio-web/
-studio-ui/
 docs/
 node_modules/

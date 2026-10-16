@@ -1146,7 +1146,5 @@ def cf_logs(app_name: str = Query("", alias="app"), user: ac.User = Depends(curr
 # ─────────────────────────────────────────────────────────────────────────────
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _UI = os.path.join(_HERE, "studio-web", "dist")             # React + UI5 Web Components build
-if not os.path.isdir(_UI):
-    _UI = os.path.join(_HERE, "studio-ui", "webapp")        # earlier SAPUI5 POC
 if os.path.isdir(_UI) and os.environ.get("STUDIO_SERVE_UI", "1") == "1":
     app.mount("/", StaticFiles(directory=_UI, html=True), name="ui")
