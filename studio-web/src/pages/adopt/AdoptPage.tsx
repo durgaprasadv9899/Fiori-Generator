@@ -223,14 +223,19 @@ function ZipSource({ st, patch, onError }: { st: WizardState; patch: (p: Partial
 function CfSource({ value, onPick }: { value: string; onPick: (n: string) => void }) {
   const [data, setData] = useState<{ apps: { name: string; state: string; in_workspace?: boolean }[]; org: string; space: string } | null>(null);
   const [err, setErr] = useState("");
+  const [needsLogin, setNeedsLogin] = useState(false);
   const [q, setQ] = useState("");
   const load = () => {
-    setErr(""); setData(null);
-    api.get<any>("api/cf/apps").then(setData).catch((e: ApiError) => setErr(e.message));
+    setErr(""); setData(null); setNeedsLogin(false);
+    api.get<any>("api/cf/apps").then(setData).catch((e: ApiError) => {
+      if (e.status === 409 && /session|sign/i.test(e.message)) setNeedsLogin(true);
+      else setErr(e.message);
+    });
   };
   useEffect(load, []);
   const apps = useMemo(() => (data?.apps || []).filter((a) => !q || a.name.toLowerCase().includes(q.toLowerCase()))
     .sort((a, b) => a.name.localeCompare(b.name)), [data, q]);
+  if (needsLogin) return <CfPasscodeSignIn onSignedIn={load} />;
   if (err) return <MessageStrip design="Critical" hideCloseButton>{err} <Button design="Transparent" icon="refresh" onClick={load}>Retry</Button></MessageStrip>;
   if (!data) return <div className="ev-row"><BusyIndicator active size="S" /><span className="ev-muted ev-small">Reading the apps from Cloud Foundry…</span></div>;
   return (
@@ -252,6 +257,36 @@ function CfSource({ value, onPick }: { value: string; onPick: (n: string) => voi
           </div>
         ))}
       </div>
+    </div>
+  );
+}
+
+/** Sign in to Cloud Foundry with a one-time SSO passcode (the studio keeps a CF session per user). */
+function CfPasscodeSignIn({ onSignedIn }: { onSignedIn: () => void }) {
+  const [url, setUrl] = useState("");
+  const [code, setCode] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  useEffect(() => { api.get<{ passcode_url?: string }>("api/cf/session").then((s) => setUrl(s.passcode_url || "")).catch(() => undefined); }, []);
+  const login = async () => {
+    setBusy(true); setErr("");
+    try { await api.post("api/cf/login", { passcode: code.trim() }); setCode(""); onSignedIn(); }
+    catch (e: any) { setErr(e.message); } finally { setBusy(false); }
+  };
+  return (
+    <div className="ev-form">
+      <FormRow label="Sign in to Cloud Foundry" hint="Needed once to list and download the apps in your space. The session is yours; the studio does not store your password.">
+        <ol className="ev-cfpass">
+          <li>Open {url ? <a href={url} target="_blank" rel="noreferrer">{url.replace(/^https:\/\//, "")}</a> : "the Cloud Foundry passcode page"} and sign in with your BTP user.</li>
+          <li>Copy the <b>Temporary Authentication Code</b> and paste it below. It works once.</li>
+        </ol>
+        <div className="ev-row">
+          <Input type="Password" placeholder="Passcode" value={code} onInput={(e) => setCode(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter" && code.trim()) login(); }} style={{ flex: 1, minWidth: 220 }} />
+          <Button design="Emphasized" icon="log" disabled={!code.trim() || busy} onClick={login}>{busy ? "Signing in…" : "Sign in"}</Button>
+        </div>
+        {err && <MessageStrip design="Negative" hideCloseButton>{err}</MessageStrip>}
+      </FormRow>
     </div>
   );
 }

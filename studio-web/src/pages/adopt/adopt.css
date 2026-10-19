@@ -263,3 +263,5 @@
   background: color-mix(in srgb, var(--sapBrandColor) 5%, var(--sapGroup_ContentBackground)); }
 .ev-adhead__chip ui5-icon { width: .8rem; height: .8rem; color: var(--sapBrandColor); }
 @media (max-width: 700px) { .ev-adhead { margin: 1rem 1rem 0; } }
+
+.ev-cfpass { margin: 0 0 .3rem; padding-left: 1.2rem; display: grid; gap: .25rem; font-size: .86rem; color: var(--sapTextColor); }
