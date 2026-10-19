@@ -167,29 +167,35 @@ kbd { font-family: var(--sapFontFamily); font-size: .7rem; padding: .08rem .38re
 .ev-row { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; }
 .ev-muted { color: var(--sapContent_LabelColor); }
 .ev-small { font-size: .8rem; }
-.ev-tabs-wrap { container-type: inline-size; margin: 0 2rem; }
-.ev-tabs { display: flex; flex-wrap: nowrap; align-items: center; gap: .25rem; padding: .3rem; overflow-x: auto; scrollbar-width: none;
-  background: var(--sapGroup_ContentBackground); border: 1px solid var(--sapGroup_ContentBorderColor); border-radius: 14px;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, .04); }
+.ev-tabs-sentinel { height: 1rem; }
+.ev-tabs-wrap { container-type: inline-size; position: sticky; top: .75rem; z-index: 20; margin: 0 2rem; border-radius: var(--ev-radius, 16px);
+  transition: box-shadow .2s ease, transform .2s ease; }
+.ev-tabs { display: flex; flex-wrap: nowrap; align-items: center; gap: .25rem; min-height: 3.25rem; padding: .4rem .45rem; overflow-x: auto;
+  scrollbar-width: none; background: var(--sapTile_Background, var(--sapGroup_ContentBackground));
+  border: 1px solid var(--sapTile_BorderColor, var(--sapGroup_ContentBorderColor)); border-radius: var(--ev-radius, 16px); box-shadow: var(--ev-shadow); }
 .ev-tabs::-webkit-scrollbar { display: none; }
-.ev-tabs__group { display: flex; flex-wrap: nowrap; gap: .1rem; flex: none; }
-.ev-tabs__sep { flex: 1 1 0; min-width: .75rem; height: 1.6rem; position: relative; }
-.ev-tabs__sep::after { content: ""; position: absolute; right: .3rem; top: 0; bottom: 0; width: 1px; background: var(--sapGroup_ContentBorderColor); }
-.ev-tab { position: relative; z-index: 0; display: inline-flex; align-items: center; gap: .4rem; border: 0; background: none; cursor: pointer;
-  padding: .45rem .62rem; border-radius: 10px; font: inherit; font-size: .85rem; font-weight: 600; white-space: nowrap; flex: none;
-  color: var(--sapContent_LabelColor); transition: color .15s, background-color .15s; }
+.ev-tabs-wrap.is-stuck .ev-tabs { box-shadow: var(--ev-shadow-hover); border-color: color-mix(in srgb, var(--sapBrandColor) 18%, var(--sapGroup_ContentBorderColor)); }
+.ev-tabs__group { display: flex; flex-wrap: nowrap; gap: .15rem; flex: none; }
+.ev-tabs__sep { flex: 1 1 0; min-width: .75rem; height: 1.7rem; position: relative; }
+.ev-tabs__sep::after { content: ""; position: absolute; right: .35rem; top: 0; bottom: 0; width: 1px; background: var(--sapGroup_ContentBorderColor); }
+.ev-tab { position: relative; z-index: 0; display: inline-flex; align-items: center; gap: .45rem; border: 0; background: none; cursor: pointer;
+  padding: .55rem .78rem; border-radius: 11px; font: inherit; font-size: .875rem; font-weight: 600; white-space: nowrap; flex: none;
+  color: var(--sapContent_LabelColor); transition: color .15s ease, background-color .15s ease, transform .15s ease; }
 .ev-tab:hover { color: var(--sapTextColor); background: var(--sapList_Hover_Background); }
+.ev-tab:active { transform: scale(.98); }
 .ev-tab:focus-visible { outline: 2px solid var(--sapContent_FocusColor); outline-offset: 1px; }
 .ev-tab.is-active, .ev-tab.is-active:hover { color: var(--sapBrandColor); background: transparent; }
-.ev-tab__pill { position: absolute; inset: 0; z-index: -1; border-radius: 10px;
-  background: color-mix(in srgb, var(--sapBrandColor) 10%, transparent);
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--sapBrandColor) 22%, transparent); }
-.ev-tab__icon { width: .95rem; height: .95rem; color: inherit; flex: none; }
-.ev-tab__count { min-width: 1.1rem; text-align: center; font-size: .7rem; font-weight: 700; padding: .05rem .32rem; border-radius: 999px;
+.ev-tab__pill { position: absolute; inset: 0; z-index: -1; border-radius: 11px;
+  background: color-mix(in srgb, var(--sapBrandColor) 9%, var(--sapTile_Background, var(--sapGroup_ContentBackground)));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--sapBrandColor) 20%, transparent); }
+.ev-tab__pill::after { content: ""; position: absolute; left: 22%; right: 22%; bottom: 3px; height: 2px; border-radius: 2px; background: var(--ev-grad, var(--sapBrandColor)); }
+.ev-tab__icon { width: 1rem; height: 1rem; color: inherit; flex: none; }
+.ev-tab__count { min-width: 1.15rem; text-align: center; font-size: .7rem; font-weight: 700; padding: .06rem .34rem; border-radius: 999px;
   background: var(--sapList_HeaderBackground, color-mix(in srgb, var(--sapNeutralColor) 12%, transparent)); color: var(--sapContent_LabelColor); }
 .ev-tab.is-active .ev-tab__count { background: var(--sapBrandColor); color: var(--sapContent_ContrastTextColor, #fff); }
 /* one line at every width: tighten, then show the secondary group as icons (+ counts) */
-@container (max-width: 1240px) { .ev-tab { padding: .45rem .5rem; gap: .32rem; font-size: .83rem; } }
+@container (max-width: 1330px) { .ev-tab { padding: .55rem .6rem; gap: .38rem; } }
+@container (max-width: 1230px) { .ev-tab { padding: .5rem .5rem; gap: .32rem; font-size: .84rem; } }
 @container (max-width: 1150px) { .ev-tabs__group.is-secondary .ev-tab:not(.is-active) .ev-tab__label { display: none; } }
 @container (max-width: 900px) { .ev-tabs__group:not(.is-secondary) .ev-tab:not(.is-active) .ev-tab__label { display: none; } }
 @media (max-width: 700px) { .ev-tabs-wrap { margin: 0 1rem; } }
@@ -230,7 +236,7 @@ kbd { font-family: var(--sapFontFamily); font-size: .7rem; padding: .08rem .38re
 .mode-import.ev-pcard__band, .ev-pcard__logo.mode-import { background: linear-gradient(135deg, #5b738b, #8396a8); }
 .ev-mini-av { width: 20px; height: 20px; border-radius: 50%; display: grid; place-items: center; font-size: .65rem; font-weight: 800; color: #fff; background: var(--ev-grad); }
 .ev-mono { font-family: Consolas, "SFMono-Regular", monospace; font-size: .8rem; }
-.ev-tabbody { padding: 1.25rem 2rem 2rem; }
+.ev-tabbody { padding: 1rem 2rem 2rem; }
 .ev-pcard__logo { width: 42px; height: 42px; border-radius: 12px; display: grid; place-items: center; color: #fff; font-weight: 800; font-size: .9rem; flex: none; }
 .ev-feed__icon { width: 32px; height: 32px; flex: none; border-radius: 50%; display: grid; place-items: center; }
 .ev-feed__icon ui5-icon { width: .9rem; height: .9rem; }
@@ -248,3 +254,5 @@ kbd { font-family: var(--sapFontFamily); font-size: .7rem; padding: .08rem .38re
 .ev-cfsign__t { font-weight: 700; font-size: .95rem; color: var(--sapTextColor); }
 .ev-cfsign__s { font-size: .82rem; color: var(--sapContent_LabelColor); }
 .ev-cfsign ol { margin: 0; padding-left: 1.2rem; display: grid; gap: .25rem; font-size: .86rem; color: var(--sapTextColor); }
+.ev-tabs-wrap.is-stuck::before { content: ""; position: absolute; left: -2px; right: -2px; top: -0.8rem; height: calc(0.8rem + 12px); z-index: -1;
+  background: var(--sapBackgroundColor); }

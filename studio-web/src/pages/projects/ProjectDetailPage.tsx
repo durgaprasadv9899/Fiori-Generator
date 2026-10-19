@@ -133,7 +133,7 @@ export default function ProjectDetailPage() {
         </div>
       </motion.div>
 
-      <div style={{ marginTop: "1rem" }}>
+      <div style={{ display: "contents" }}>
         <Tabs id="pd" value={tab} onChange={setTab} tabs={[
           ...(adopted ? ADOPT_TABS.map((t) => ({ ...t, group: "work" })) : []),
           { key: "versions", text: "Versions", icon: "save", count: data.versions.length, group: "manage" },
