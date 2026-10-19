@@ -236,3 +236,10 @@ kbd { font-family: var(--sapFontFamily); font-size: .7rem; padding: .08rem .38re
 .tone-info { background: color-mix(in srgb, var(--sapInformativeColor) 13%, transparent); } .tone-info ui5-icon { color: var(--sapInformativeColor); }
 .tone-neutral { background: var(--sapList_HeaderBackground); } .tone-neutral ui5-icon { color: var(--sapContent_IconColor); }
 .mode-adopted.ev-pcard__band, .ev-pcard__logo.mode-adopted { background: linear-gradient(135deg, #0a7a6e, #0070f2); }
+
+/* Cloud Foundry passcode sign-in */
+.ev-cfsign { display: flex; flex-direction: column; gap: .55rem; padding: 1rem 1.1rem; border-radius: 12px;
+  border: 1px solid var(--sapGroup_ContentBorderColor); background: color-mix(in srgb, var(--sapBrandColor) 4%, var(--sapGroup_ContentBackground)); }
+.ev-cfsign__t { font-weight: 700; font-size: .95rem; color: var(--sapTextColor); }
+.ev-cfsign__s { font-size: .82rem; color: var(--sapContent_LabelColor); }
+.ev-cfsign ol { margin: 0; padding-left: 1.2rem; display: grid; gap: .25rem; font-size: .86rem; color: var(--sapTextColor); }

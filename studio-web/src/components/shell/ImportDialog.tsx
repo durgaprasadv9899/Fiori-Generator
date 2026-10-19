@@ -8,6 +8,7 @@ import { api } from "../../api/client";
 import { useJobs } from "../../jobs/JobProvider";
 import { useToast } from "./Toasts";
 import { Modal } from "./ProjectDialogs";
+import { CfPasscodeSignIn, isNoCfSession } from "./CfSignIn";
 import { LiveTimeline, Skeleton, StatusBadge } from "../ui";
 import "./import.css";
 
@@ -80,10 +81,14 @@ function CfImport({ onDone }: { onDone: () => void }) {
   const jobs = useJobs();
   const [data, setData] = useState<{ apps: CfApp[]; space: string; org: string } | null>(null);
   const [err, setErr] = useState("");
+  const [needsLogin, setNeedsLogin] = useState(false);
   const [q, setQ] = useState("");
   const [jobId, setJobId] = useState("");
   const [picked, setPicked] = useState("");
-  const load = () => { setErr(""); setData(null); api.get("api/cf/apps").then(setData).catch((e) => setErr(e.message)); };
+  const load = () => {
+    setErr(""); setData(null); setNeedsLogin(false);
+    api.get("api/cf/apps").then(setData).catch((e) => (isNoCfSession(e) ? setNeedsLogin(true) : setErr(e.message)));
+  };
   useEffect(load, []);
   const job = jobs.get(jobId);
   const apps = useMemo(() => (data?.apps || []).filter((a) => !q || a.name.toLowerCase().includes(q.toLowerCase()))
@@ -98,6 +103,7 @@ function CfImport({ onDone }: { onDone: () => void }) {
       setJobId(id);
     } catch (e: any) { setErr(e.message); setPicked(""); }
   };
+  if (needsLogin) return <div className="ev-imp__body"><CfPasscodeSignIn onSignedIn={load} /></div>;
   return (
     <div className="ev-imp__body">
       {data && <div className="ev-imp__space"><Icon name="cloud" /> {data.org} · <b>{data.space}</b><span className="ev-muted ev-small">{data.apps.length} apps</span>
