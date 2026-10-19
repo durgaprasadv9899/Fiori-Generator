@@ -167,12 +167,27 @@ kbd { font-family: var(--sapFontFamily); font-size: .7rem; padding: .08rem .38re
 .ev-row { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; }
 .ev-muted { color: var(--sapContent_LabelColor); }
 .ev-small { font-size: .8rem; }
-.ev-tabs { display: flex; gap: .25rem; border-bottom: 1px solid var(--sapGroup_TitleBorderColor); margin: 0 2rem; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; }
-.ev-tab { position: relative; border: 0; background: none; padding: .8rem .95rem; cursor: pointer; font: inherit; font-size: .9rem; color: var(--sapContent_LabelColor); font-weight: 600; white-space: nowrap; display: flex; gap: .45rem; align-items: center; }
-.ev-tab:hover { color: var(--sapTextColor); }
-.ev-tab.is-active { color: var(--sapBrandColor); }
-.ev-tab__line { position: absolute; left: .5rem; right: .5rem; bottom: -1px; height: 3px; border-radius: 3px 3px 0 0; background: var(--sapBrandColor); }
-.ev-tab__count { font-size: .7rem; padding: .05rem .45rem; border-radius: 10px; background: var(--sapList_HeaderBackground); color: var(--sapContent_LabelColor); }
+.ev-tabs { display: flex; flex-wrap: wrap; align-items: center; gap: .25rem; margin: 0 2rem; padding: .3rem;
+  background: var(--sapGroup_ContentBackground); border: 1px solid var(--sapGroup_ContentBorderColor); border-radius: 14px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, .04); }
+.ev-tabs__group { display: flex; flex-wrap: wrap; gap: .1rem; }
+.ev-tabs__group + .ev-tabs__sep + .ev-tabs__group, .ev-tabs__sep + .ev-tabs__group { margin-left: 0; }
+.ev-tabs__sep { flex: 1 1 0; min-width: .5rem; height: 1.6rem; align-self: center; background: none; position: relative; }
+.ev-tabs__sep::after { content: ""; position: absolute; right: .3rem; top: 0; bottom: 0; width: 1px; background: var(--sapGroup_ContentBorderColor); }
+.ev-tab { position: relative; z-index: 0; display: inline-flex; align-items: center; gap: .4rem; border: 0; background: none; cursor: pointer;
+  padding: .45rem .62rem; border-radius: 10px; font: inherit; font-size: .85rem; font-weight: 600; white-space: nowrap;
+  color: var(--sapContent_LabelColor); transition: color .15s, background-color .15s; }
+.ev-tab:hover { color: var(--sapTextColor); background: var(--sapList_Hover_Background); }
+.ev-tab:focus-visible { outline: 2px solid var(--sapContent_FocusColor); outline-offset: 1px; }
+.ev-tab.is-active, .ev-tab.is-active:hover { color: var(--sapBrandColor); background: transparent; }
+.ev-tab__pill { position: absolute; inset: 0; z-index: -1; border-radius: 10px;
+  background: color-mix(in srgb, var(--sapBrandColor) 10%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--sapBrandColor) 22%, transparent); }
+.ev-tab__icon { width: .95rem; height: .95rem; color: inherit; flex: none; }
+.ev-tab__count { min-width: 1.1rem; text-align: center; font-size: .7rem; font-weight: 700; padding: .05rem .32rem; border-radius: 999px;
+  background: var(--sapList_HeaderBackground, color-mix(in srgb, var(--sapNeutralColor) 12%, transparent)); color: var(--sapContent_LabelColor); }
+.ev-tab.is-active .ev-tab__count { background: var(--sapBrandColor); color: var(--sapContent_ContrastTextColor, #fff); }
+@media (max-width: 700px) { .ev-tabs { margin: 0 1rem; } .ev-tabs__sep { display: none; } }
 .ev-error { margin: 1rem 2rem; }
 .ev-list { display: flex; flex-direction: column; }
 .ev-li { display: flex; align-items: center; gap: .8rem; padding: .75rem .2rem; border-bottom: 1px solid var(--sapList_BorderColor); }
@@ -220,3 +235,4 @@ kbd { font-family: var(--sapFontFamily); font-size: .7rem; padding: .08rem .38re
 .tone-bad { background: color-mix(in srgb, var(--sapNegativeColor) 13%, transparent); } .tone-bad ui5-icon { color: var(--sapNegativeColor); }
 .tone-info { background: color-mix(in srgb, var(--sapInformativeColor) 13%, transparent); } .tone-info ui5-icon { color: var(--sapInformativeColor); }
 .tone-neutral { background: var(--sapList_HeaderBackground); } .tone-neutral ui5-icon { color: var(--sapContent_IconColor); }
+.mode-adopted.ev-pcard__band, .ev-pcard__logo.mode-adopted { background: linear-gradient(135deg, #0a7a6e, #0070f2); }

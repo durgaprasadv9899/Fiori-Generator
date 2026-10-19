@@ -56,6 +56,7 @@ export default function DashboardPage() {
           <div className="ev-hero3__actions">
             <button className="ev-hbtn is-primary" onClick={() => nav("/studio")}><Icon name="add-document" />New application</button>
             <button className="ev-hbtn" onClick={() => nav("/studio?mode=sap")}><Icon name="connected" />Connect SAP service</button>
+            <button className="ev-hbtn" onClick={() => nav("/adopt")}><Icon name="inbox" />Adopt existing project</button>
             <button className="ev-hbtn" onClick={() => setImporting(true)}><Icon name="upload" />Import project</button>
           </div>
         )}

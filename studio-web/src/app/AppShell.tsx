@@ -28,6 +28,7 @@ export function AppShell() {
   const NAV: NavItem[] = [
     { path: "/", text: "Dashboard", icon: "home", group: "Workspace" },
     { path: "/studio", text: "New application", icon: "add-document", group: "Workspace", perm: ["project.create"] },
+    { path: "/adopt", text: "Adopt project", icon: "inbox", group: "Workspace", perm: ["project.create"] },
     { path: "/projects", text: "Projects", icon: "folder-blank", group: "Workspace" },
     { path: "/approvals", text: "Approvals", icon: "approvals", badge: pending, group: "Governance", perm: ["approval.decide", "approval.request"] },
     { path: "/audit", text: "Audit log", icon: "history", group: "Governance" },

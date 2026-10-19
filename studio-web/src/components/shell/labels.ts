@@ -14,6 +14,8 @@ export function actionInfo(action: string): { text: string; icon: string; tone: 
     [/^project\.archive/, "archived / restored the project", "inbox", "neutral"],
     [/^project\.duplicate/, "duplicated the project", "duplicate", "neutral"],
     [/^project\.import/, "imported the project", "upload", "brand"],
+    [/^project\.adopt/, "adopted an existing project", "inbox", "brand"],
+    [/^robot\./, "made an AI change", "ai", "brand"],
     [/^project\.export/, "exported the project", "download", "neutral"],
     [/^member\./, "changed project members", "group", "neutral"],
     [/^version\.save/, "saved a new version", "save", "brand"],
@@ -39,6 +41,7 @@ export const MODE_INFO: Record<string, { label: string; icon: string; tone: Tone
   sap: { label: "SAP service", icon: "connected", tone: "info" },
   standalone: { label: "New app + CAP", icon: "database", tone: "brand" },
   import: { label: "Imported", icon: "upload", tone: "neutral" },
+  adopted: { label: "Adopted", icon: "inbox", tone: "info" },
 };
 
 export function statusTone(s: string): Tone {

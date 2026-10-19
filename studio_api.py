@@ -174,7 +174,7 @@ def dashboard(user: ac.User = Depends(current_user)):
         day = time.strftime("%Y-%m-%d", time.localtime(today - i * 86400))
         per_day.append({"day": day, "count": sum(1 for v in versions
                                                   if time.strftime("%Y-%m-%d", time.localtime(v["created_at"] or 0)) == day)})
-    by_mode = {"sap": 0, "standalone": 0, "import": 0}
+    by_mode = {"sap": 0, "standalone": 0, "import": 0, "adopted": 0}
     for p in projs:
         by_mode[p.get("mode") or "sap"] = by_mode.get(p.get("mode") or "sap", 0) + 1
     pending = [a for a in STORE.list_approvals("pending", user=user) if ac.can(user, "approval.decide")]
@@ -1034,6 +1034,8 @@ def _w_validate(say, user, vid, level):
     import build_validation as bv
     v = STORE.get_version(vid, with_files=True)
     s = v.get("snapshot") or {}
+    if s.get("app_mode") == "adopted":            # adopted projects: their own commands, in the runner
+        return _adopt_validate(say, user, vid)
     model = None
     if s.get("md_edmx"):
         extra = [{"edmx": e["edmx"], "service_url": e["service_url"], "title": e.get("title", "")}
@@ -1139,6 +1141,14 @@ def cf_logs(app_name: str = Query("", alias="app"), user: ac.User = Depends(curr
     import api_deploy
     ok, text = api_deploy.deployer(user).get_recent_logs(app_name.strip())
     return {"ok": ok, "text": text}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Adopted projects (docs/adopt-api.md) — registers /api/adopt/* and the robot / runner jobs
+# ─────────────────────────────────────────────────────────────────────────────
+import api_adopt  # noqa: E402
+
+api_adopt.register(app, globals())      # also defines _adopt_validate (used by _w_validate)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

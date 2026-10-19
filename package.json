@@ -1,0 +1,6 @@
+{
+  "name": "evoke-studio-runner-tooling",
+  "private": true,
+  "description": "Only tells the Node.js buildpack which Node.js the studio runner (manifest-runner.yml) provides to adopted client projects.",
+  "engines": { "node": "22.x" }
+}

@@ -9,7 +9,7 @@ const SIZES: Record<Device, { w: number | string; h: number }> = {
   phone: { w: 390, h: 700 },
 };
 
-export function DeviceFrame({ device, html, title }: { device: Device; html: string; title?: string }) {
+export function DeviceFrame({ device, html, src, title }: { device: Device; html?: string; src?: string; title?: string }) {
   const s = SIZES[device];
   return (
     <div className="ev-device-stage">
@@ -24,7 +24,9 @@ export function DeviceFrame({ device, html, title }: { device: Device; html: str
         ) : (
           <div className="ev-device__notch" />
         )}
-        <iframe className="ev-device__screen" title="App preview" srcDoc={html} sandbox="allow-scripts allow-same-origin allow-popups allow-forms" />
+        {src ? <iframe className="ev-device__screen" title="App preview" src={src} allow="clipboard-write"
+            sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals allow-downloads" />
+          : <iframe className="ev-device__screen" title="App preview" srcDoc={html} sandbox="allow-scripts allow-same-origin allow-popups allow-forms" />}
       </motion.div>
     </div>
   );

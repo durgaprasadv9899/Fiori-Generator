@@ -1,6 +1,6 @@
 // Project detail: object header with KPIs; Versions (timeline, validate, deploy, compare, files),
 // Deployments, Members, Settings (rename, duplicate, archive, export).
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { useNavigate, useParams } from "react-router-dom";
 import { Button, Icon, Input, MessageStrip, Select, Option, SegmentedButton, SegmentedButtonItem, BusyIndicator } from "@ui5/webcomponents-react";
@@ -14,6 +14,7 @@ import { useJobs } from "../../jobs/JobProvider";
 import { api } from "../../api/client";
 import type { Project, VersionMeta } from "../../api/types";
 import { ConfirmDialog, DeleteProjectDialog, EditProjectDialog } from "../../components/shell/ProjectDialogs";
+import { ADOPT_KEYS, ADOPT_TABS, AdoptedWorkspace } from "../adopt/AdoptedWorkspace";
 import "./projects.css";
 
 interface Detail {
@@ -41,8 +42,15 @@ export default function ProjectDetailPage() {
   const [delOpen, setDelOpen] = useState(false);
   const [delVer, setDelVer] = useState<VersionMeta | null>(null);
   const [undeployEnv, setUndeployEnv] = useState("");
+  const [deployVid, setDeployVid] = useState("");
+  const tabInit = useRef(false);
 
   useEffect(() => { if (data) setName(data.project.name); }, [data]);
+  useEffect(() => {                      // adopted projects open on their workspace overview
+    if (!data || tabInit.current) return;
+    tabInit.current = true;
+    if (data.project.mode === "adopted") setTab("overview");
+  }, [data]);
 
   if (error) return <div className="ev-content" style={{ paddingTop: "2rem" }}>
     <EmptyState icon="error" title="Project not available" text={error} action={<Button onClick={() => nav("/projects")}>Back to projects</Button>} /></div>;
@@ -57,6 +65,8 @@ export default function ProjectDetailPage() {
   const validated = data.versions.filter((v) => v.validation).length;
   const okDeploys = data.deployments.filter((d) => d.status === "succeeded");
   const live = okDeploys[0];
+  const adopted = p.mode === "adopted";
+  const deployVersion = (vid: string) => { if (adopted) { setDeployVid(vid); setTab("deploy"); } else nav(`/deploy/${vid}`); };
 
   const rename = async () => {
     if (!name.trim() || name === p.name) { setEditing(false); return; }
@@ -107,8 +117,10 @@ export default function ProjectDetailPage() {
           <div className="ev-objhead__actions">
             {may("project.edit") && <Button icon="edit" design="Transparent" onClick={() => setEditOpen(true)}>Edit details</Button>}
             {data.can_delete && <Button icon="delete" design="Transparent" tooltip="Delete project" onClick={() => setDelOpen(true)} />}
-            {latest && may("project.edit") && <Button icon="action" onClick={() => nav(`/studio?version=${latest.id}`)}>Open in studio</Button>}
-            {latest && mayDeploy && <Button icon="paper-plane" design="Emphasized" onClick={() => nav(`/deploy/${latest.id}`)}>Deploy latest</Button>}
+            {latest && may("project.edit") && (adopted
+              ? <Button icon="ai" onClick={() => setTab("robot")}>Ask AI</Button>
+              : <Button icon="action" onClick={() => nav(`/studio?version=${latest.id}`)}>Open in studio</Button>)}
+            {latest && mayDeploy && <Button icon="paper-plane" design="Emphasized" onClick={() => deployVersion(latest.id)}>Deploy latest</Button>}
           </div>
         </div>
         <div className="ev-objhead__kpis">
@@ -123,17 +135,22 @@ export default function ProjectDetailPage() {
 
       <div style={{ marginTop: "1rem" }}>
         <Tabs id="pd" value={tab} onChange={setTab} tabs={[
-          { key: "versions", text: "Versions", icon: "save", count: data.versions.length },
-          { key: "deployments", text: "Deployments", icon: "paper-plane", count: data.deployments.length },
-          { key: "members", text: "Members", icon: "group", count: (p.members || []).length + 1 },
-          { key: "settings", text: "Settings", icon: "settings" },
+          ...(adopted ? ADOPT_TABS.map((t) => ({ ...t, group: "work" })) : []),
+          { key: "versions", text: "Versions", icon: "save", count: data.versions.length, group: "manage" },
+          { key: "deployments", text: "Deployments", icon: "paper-plane", count: data.deployments.length, group: "manage" },
+          { key: "members", text: "Members", icon: "group", count: (p.members || []).length + 1, group: "manage" },
+          { key: "settings", text: "Settings", icon: "settings", group: "manage" },
         ]} />
       </div>
 
       <AnimatePresence mode="wait">
         <motion.div key={tab} className="ev-tabbody" initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} transition={{ duration: 0.18 }}>
+          {adopted && ADOPT_KEYS.includes(tab) && (
+            <AdoptedWorkspace pid={pid} tab={tab} setTab={setTab} versions={data.versions} mayEdit={may("project.edit")} mayDeploy={mayDeploy}
+              onChanged={() => reload(true)} deployVid={deployVid} setDeployVid={setDeployVid} />
+          )}
           {tab === "versions" && (
-            data.versions.length === 0 ? <EmptyState icon="save" title="No versions yet" text="Generate the application in the studio — each generation is saved here." /> : (
+            data.versions.length === 0 ? <EmptyState icon="save" title="No versions yet" text={adopted ? "AI changes you apply are saved here as versions." : "Generate the application in the studio — each generation is saved here."} /> : (
               <>
                 <div className="ev-muted ev-small" style={{ marginBottom: ".8rem" }}>Tip: tick two versions to compare them.</div>
                 <div className="ev-vtl">
@@ -161,9 +178,9 @@ export default function ProjectDetailPage() {
                             <Button design="Transparent" icon="documents" tooltip="Browse files" onClick={() => setFiles(v)}>Files</Button>
                             <Button design="Transparent" icon="download" tooltip="Download ZIP" onClick={() => download(`api/versions/${v.id}/zip`)} />
                             <Button design="Transparent" icon="shield" disabled={running} tooltip="Validate (standard)" onClick={() => validate(v, "standard")}>Validate</Button>
-                            <Button design="Transparent" icon="edit" tooltip="Open this version in the studio" onClick={() => nav(`/studio?version=${v.id}`)} />
+                            {!adopted && <Button design="Transparent" icon="edit" tooltip="Open this version in the studio" onClick={() => nav(`/studio?version=${v.id}`)} />}
                             {data.versions.length > 1 && may("project.edit") && <Button design="Transparent" icon="delete" tooltip="Delete this version" onClick={() => setDelVer(v)} />}
-                            {mayDeploy && <Button design="Emphasized" icon="paper-plane" onClick={() => nav(`/deploy/${v.id}`)}>Deploy</Button>}
+                            {mayDeploy && <Button design="Emphasized" icon="paper-plane" onClick={() => deployVersion(v.id)}>Deploy</Button>}
                           </div>
                         </div>
                       </motion.div>
@@ -190,7 +207,7 @@ export default function ProjectDetailPage() {
 
           {tab === "deployments" && (
             data.deployments.length === 0 ? <EmptyState icon="paper-plane" title="Not deployed yet" text="Deploy a version to SAP BTP — development needs no approval, production needs an approved, validated version."
-              action={latest && <Button design="Emphasized" icon="paper-plane" onClick={() => nav(`/deploy/${latest.id}`)}>Deploy the latest version</Button>} /> : (
+              action={latest && <Button design="Emphasized" icon="paper-plane" onClick={() => deployVersion(latest.id)}>Deploy the latest version</Button>} /> : (
               <div className="ev-card" style={{ overflow: "auto" }}>
                 <table className="ev-dtable">
                   <thead><tr><th>When</th><th>Environment</th><th>Version</th><th>Status</th><th>By</th><th>URL</th><th /></tr></thead>

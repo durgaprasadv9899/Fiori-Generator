@@ -33,7 +33,7 @@ import uuid
 import zipfile
 from typing import Any, Dict, List, Optional
 
-PROJECT_MODES = ("sap", "standalone", "import")
+PROJECT_MODES = ("sap", "standalone", "import", "adopted")
 MEMBER_ROLES = ("viewer", "developer", "reviewer")
 APPROVAL_STATES = ("pending", "approved", "rejected", "imported")
 _DIFF_CAP = 60_000

@@ -45,6 +45,7 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
     { id: "n-dash", group: "Navigate", title: "Dashboard", icon: "home", run: go("/") },
     { id: "n-studio", group: "Navigate", title: "New application", hint: "AI data model + CAP backend + UI", icon: "add-document", run: go("/studio"), keywords: "create build generate" },
     { id: "n-sap", group: "Navigate", title: "Connect an SAP service", hint: "Build on an existing OData service", icon: "connected", run: go("/studio?mode=sap"), keywords: "odata destination s4" },
+    { id: "n-adopt", group: "Navigate", title: "Adopt an existing project", hint: "CAP, Fiori, UI5, React, Angular, Node.js, Python", icon: "inbox", run: go("/adopt"), keywords: "existing git zip cloud foundry ai assistant cap react angular python" },
     { id: "n-proj", group: "Navigate", title: "Projects", icon: "folder-blank", run: go("/projects") },
     { id: "n-appr", group: "Navigate", title: "Approvals", icon: "approvals", run: go("/approvals"), keywords: "release review" },
     { id: "n-audit", group: "Navigate", title: "Audit log", icon: "history", run: go("/audit") },

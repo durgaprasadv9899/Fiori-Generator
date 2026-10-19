@@ -1,0 +1,19 @@
+applications:
+  # The studio runner: runs adopted client projects (npm/pip installs, builds, tests, previews, MTA builds)
+  # in sandboxes. Deliberately bound to NO services and given no studio credentials — client code that
+  # runs here cannot reach AI Core, the workspace, XSUAA or Cloud Foundry.
+  # Only the studio API calls /jobs, /sessions, /artifacts (shared secret RUNNER_TOKEN, set with cf set-env);
+  # browsers open previews through signed, expiring /p/<token>/ links.
+  - name: evoke-studio-runner
+    memory: 2G
+    disk_quota: 4G
+    instances: 1
+    buildpacks:
+      - nodejs_buildpack      # supplies node + npm (package.json engines) for the client projects
+      - python_buildpack      # runs the runner service
+    command: python -m uvicorn runner_service:app --host 0.0.0.0 --port $PORT --timeout-keep-alive 75
+    health-check-type: http
+    health-check-http-endpoint: /health
+    env:
+      STUDIO_DATA_DIR: /home/vcap/app/.runner-data
+      # RUNNER_TOKEN: (cf set-env evoke-studio-runner RUNNER_TOKEN …) — same value on evoke-studio-api

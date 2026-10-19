@@ -27,6 +27,7 @@ const Approvals = lazyPage(() => import("../pages/approvals/ApprovalsPage"));
 const Audit = lazyPage(() => import("../pages/audit/AuditPage"));
 const Settings = lazyPage(() => import("../pages/settings/SettingsPage"));
 const Users = lazyPage(() => import("../pages/admin/UsersPage"));
+const Adopt = lazyPage(() => import("../pages/adopt/AdoptPage"));
 
 const page = (el: React.ReactNode) => (
   <Suspense fallback={<div className="ev-page-loading"><BusyIndicator active size="L" /></div>}>{el}</Suspense>
@@ -39,6 +40,7 @@ export function AppRoutes() {
         <Route index element={page(<Dashboard />)} />
         <Route path="studio" element={page(<RequirePerm perm="project.create" what="Creating applications"><Studio /></RequirePerm>)} />
         <Route path="studio/:step" element={page(<RequirePerm perm="project.create" what="Creating applications"><Studio /></RequirePerm>)} />
+        <Route path="adopt" element={page(<RequirePerm perm="project.create" what="Adopting projects"><Adopt /></RequirePerm>)} />
         <Route path="projects" element={page(<Projects />)} />
         <Route path="projects/:pid" element={page(<ProjectDetail />)} />
         <Route path="compare/:a/:b" element={page(<Compare />)} />
