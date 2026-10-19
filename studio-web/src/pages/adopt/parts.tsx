@@ -93,18 +93,92 @@ export function Findings({ findings }: { findings: Finding[] }) {
   );
 }
 
-export function UnderstandingBlock({ u }: { u?: Understanding }) {
-  if (!u || !(u.summary || u.business_objects?.length || u.processes?.length)) return null;
-  const list = (items?: string[]) => <ul>{(items || []).map((x) => <li key={x}>{x}</li>)}</ul>;
+/** "Name: description" / "Name (description)" -> parts, for compact cards. */
+export function splitItem(item: string): { name: string; desc: string } {
+  const m = /^([^:(]{2,70}?)\s*(?::|\(|—|–| - )\s*([\s\S]+?)\)?$/.exec(item.trim());
+  return m ? { name: m[1].trim(), desc: m[2].trim() } : { name: item.trim(), desc: "" };
+}
+
+function ScenarioSection({ icon, title, count, children }: { icon: string; title: string; count?: number; children: React.ReactNode }) {
   return (
-    <div className="ev-facts">
-      {u.summary && <Fact label="Summary"><span className="ev-summary">{u.summary}</span></Fact>}
-      {!!u.business_objects?.length && <Fact label="Business objects">
-        <div className="ev-chiprow">{u.business_objects.map((x) => <span key={x} className="ev-chip2">{x}</span>)}</div></Fact>}
-      {!!u.roles?.length && <Fact label="Roles">{list(u.roles)}</Fact>}
-      {!!u.processes?.length && <Fact label="Processes">{list(u.processes)}</Fact>}
-      {!!u.integrations?.length && <Fact label="Integrations">{list(u.integrations)}</Fact>}
-      {!!u.risks?.length && <Fact label="Risks">{list(u.risks)}</Fact>}
+    <section className="ev-scn__sec">
+      <h4 className="ev-scn__h"><Icon name={icon} />{title}{count ? <span className="ev-scn__n">{count}</span> : null}</h4>
+      {children}
+    </section>
+  );
+}
+
+function MiniCards({ items, icon }: { items: string[]; icon: string }) {
+  return (
+    <div className="ev-mini">
+      {items.map((x) => {
+        const { name, desc } = splitItem(x);
+        return (
+          <div key={x} className="ev-mini__card" title={x}>
+            <span className="ev-mini__icon"><Icon name={icon} /></span>
+            <div><b>{name}</b>{desc && <span>{desc}</span>}</div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function ShowMore({ total, open, onToggle, what }: { total: number; open: boolean; onToggle: () => void; what: string }) {
+  return <button className="ev-linkbtn ev-scn__more" onClick={onToggle}>{open ? "Show less" : `Show all ${total} ${what}`}</button>;
+}
+
+function Timeline({ items }: { items: string[] }) {
+  const [all, setAll] = useState(false);
+  const shown = all ? items : items.slice(0, 4);
+  return (
+    <>
+      <ol className="ev-tline">
+        {shown.map((x, i) => {
+          const { name, desc } = splitItem(x);
+          return <li key={x}><span className="ev-tline__n">{i + 1}</span><div><b>{name}</b>{desc && <span>{desc}</span>}</div></li>;
+        })}
+      </ol>
+      {items.length > 4 && <ShowMore total={items.length} open={all} onToggle={() => setAll(!all)} what="processes" />}
+    </>
+  );
+}
+
+function IconList({ items, icon, tone, what }: { items: string[]; icon: string; tone: "info" | "warn"; what: string }) {
+  const [all, setAll] = useState(false);
+  const shown = all ? items : items.slice(0, 4);
+  return (
+    <>
+      <ul className={`ev-ilist ev-ilist--${tone}`}>
+        {shown.map((x) => {
+          const { name, desc } = splitItem(x);
+          return <li key={x}><Icon name={icon} /><div><b>{name}</b>{desc && <span>{desc}</span>}</div></li>;
+        })}
+      </ul>
+      {items.length > 4 && <ShowMore total={items.length} open={all} onToggle={() => setAll(!all)} what={what} />}
+    </>
+  );
+}
+
+export function UnderstandingBlock({ u, hideSummary }: { u?: Understanding; hideSummary?: boolean }) {
+  if (!u || !(u.summary || u.business_objects?.length || u.processes?.length)) return null;
+  return (
+    <div className="ev-scn">
+      {u.summary && !hideSummary && <p className="ev-scn__lead">{u.summary}</p>}
+      {!!u.business_objects?.length && <ScenarioSection icon="product" title="Business objects" count={u.business_objects.length}>
+        <MiniCards items={u.business_objects} icon="product" /></ScenarioSection>}
+      {!!u.roles?.length && <ScenarioSection icon="employee" title="Roles" count={u.roles.length}>
+        <MiniCards items={u.roles} icon="employee" /></ScenarioSection>}
+      {!!u.processes?.length && <ScenarioSection icon="process" title="Processes" count={u.processes.length}>
+        <Timeline items={u.processes} /></ScenarioSection>}
+      {(!!u.integrations?.length || !!u.risks?.length) && (
+        <div className="ev-scn__pair">
+          {!!u.integrations?.length && <ScenarioSection icon="chain-link" title="Integrations" count={u.integrations.length}>
+            <IconList items={u.integrations} icon="connected" tone="info" what="integrations" /></ScenarioSection>}
+          {!!u.risks?.length && <ScenarioSection icon="warning2" title="Risks" count={u.risks.length}>
+            <IconList items={u.risks} icon="alert" tone="warn" what="risks" /></ScenarioSection>}
+        </div>
+      )}
     </div>
   );
 }

@@ -2,7 +2,7 @@
 // project with a reviewed diff), live preview, data & screens, project brief, deploy. One column, aligned rows.
 import { useEffect, useMemo, useState } from "react";
 import { Button, Icon, Input, MessageStrip, Option, SegmentedButton, SegmentedButtonItem, Select, BusyIndicator } from "@ui5/webcomponents-react";
-import { Card, LiveTimeline, Skeleton, StatusBadge, EmptyState, ago } from "../../components/ui";
+import { Card, KpiTile, LiveTimeline, Skeleton, StatusBadge, EmptyState, ago } from "../../components/ui";
 import { useApi } from "../../components/shell/useApi";
 import { useToast } from "../../components/shell/Toasts";
 import type { TabDef } from "../../components/shell/Tabs";
@@ -76,25 +76,37 @@ function Overview({ pid, info, mayEdit, onAsk, onTab, onChanged }: {
   const toast = useToast();
   const a = info.analysis;
   const [sugg, setSugg] = useState<Suggestion[]>(() => a.understanding?.suggested_missions || []);
+  const [moreAbout, setMoreAbout] = useState(false);
+  const [allSugg, setAllSugg] = useState(false);
   const suggest = useTrackedJob<{ suggestions: Suggestion[] }>(`robot-suggest.${pid}`, (r) => setSugg(r.suggestions || []),
     (e) => toast(`Suggestions failed: ${e}`, "error"));
   const reanalyze = useTrackedJob(`adopt-reanalyze.${pid}`, () => { toast("Analysis refreshed"); onChanged(); }, (e) => toast(`Analysis failed: ${e}`, "error"));
   const applied = info.missions.filter((m) => m.applied_version).length;
   const b = info.brief || {};
   const protectedPaths = Array.isArray(b.protected) ? b.protected : [];
-  const link = (t: string, label: string) => <button className="ev-linkbtn" onClick={() => onTab(t)}>{label}</button>;
+  const purpose = String(b.purpose || a.understanding?.summary || "");
+  const target = { mta: "MTA build + deploy", "cf-push": "cf push to Cloud Foundry", "git-pr": "Pull request to Git", download: "Download only" }[String(b.deploy_target)] || String(b.deploy_target || "—");
+  const findings = a.findings || [];
   return (
-    <>
-      <Card title="Summary" icon="overview-chart" subtitle={`${a.files} files · source ${a.source.label || a.source.kind}`}>
-        <div className="ev-facts">
-          <Fact label="Purpose">{String(b.purpose || a.understanding?.summary || "—")}</Fact>
+    <div className="ev-ov">
+      <div className="ev-ov__kpis">
+        <KpiTile label="Modules" value={a.modules.length} icon="dimension" tone="brand" hint={a.modules.map((m) => m.name).join(" · ")} />
+        <KpiTile label="Entities" value={a.model.entities.length} icon="database" tone="good" hint={a.model.source || "no data model"} onClick={() => onTab("model")} />
+        <KpiTile label="Screens & APIs" value={a.screens.length + a.endpoints.length} icon="screen-split-three" tone="neutral"
+          hint={`${a.screens.length} screens · ${a.endpoints.length} endpoints`} onClick={() => onTab("model")} />
+        <KpiTile label="AI changes" value={applied} icon="ai" tone="brand" hint={`${info.missions.length} requests`} onClick={() => onTab("robot")} />
+      </div>
+
+      <Card title="About this project" icon="hint" subtitle={`${a.files} files · source ${a.source.label || a.source.kind}`}
+        actions={<Button design="Transparent" icon="edit" onClick={() => onTab("brief")}>Edit brief</Button>}>
+        {purpose && <>
+          <p className={"ev-ov__purpose" + (moreAbout ? " is-open" : "")}>{purpose}</p>
+          {purpose.length > 320 && <button className="ev-linkbtn" onClick={() => setMoreAbout(!moreAbout)}>{moreAbout ? "Show less" : "Show more"}</button>}
+        </>}
+        <div className="ev-facts" style={{ marginTop: ".8rem" }}>
           <Fact label="Stack"><StackChips stack={a.stack} /></Fact>
-          <Fact label="Modules">{a.modules.length} · {a.modules.map((m) => m.name).join(", ")}</Fact>
-          <Fact label="Data model">{a.model.entities.length ? <>{a.model.entities.length} entities from {a.model.source} · {link("model", "View")}</> : "No data model recognised"}</Fact>
-          <Fact label="Screens & APIs">{a.screens.length} screens · {a.endpoints.length} API endpoints · {link("model", "View")}</Fact>
-          <Fact label="AI changes">{applied} applied · {info.missions.length} requests · {link("robot", "Open AI Assistant")}</Fact>
-          <Fact label="Deploys to">{String(b.deploy_target || "—")}</Fact>
-          <Fact label="Never changed by AI">{protectedPaths.length ? protectedPaths.join(", ") : "nothing protected"} · {link("brief", "Edit brief")}</Fact>
+          <Fact label="Deploys to">{target}</Fact>
+          <Fact label="Never changed by AI">{protectedPaths.length ? <span className="ev-mono">{protectedPaths.join(", ")}</span> : "nothing protected"}</Fact>
           <Fact label="Sandbox">
             <StatusBadge tone={info.runner?.ok ? "good" : "warn"} icon={info.runner?.ok ? "machine" : "alert"}>{info.runner?.ok ? "available" : "unavailable"}</StatusBadge>
             {info.runner?.node && <span className="ev-muted ev-small">&nbsp; Node {info.runner.node}</span>}
@@ -103,9 +115,9 @@ function Overview({ pid, info, mayEdit, onAsk, onTab, onChanged }: {
         </div>
       </Card>
 
-      <Card title="How it fits together" icon="org-chart">
+      <Card title="Architecture" icon="org-chart" subtitle="How the parts of the project connect">
         <ArchDiagram arch={a.arch} />
-        <div style={{ marginTop: ".8rem" }}><LanguageBar languages={a.languages} /></div>
+        <div style={{ marginTop: ".9rem" }}><LanguageBar languages={a.languages} /></div>
       </Card>
 
       <Card title="Business scenario" icon="ai" subtitle="How the AI reads the project. Correct it in the project brief if something is wrong."
@@ -113,29 +125,38 @@ function Overview({ pid, info, mayEdit, onAsk, onTab, onChanged }: {
           onClick={() => reanalyze.start("api/jobs/adopt-reanalyze", { project_id: pid }).catch((e) => toast(e.message, "error"))}>
           {reanalyze.running ? "Analysing…" : "Re-analyse"}</Button>}>
         {reanalyze.running ? <LiveTimeline messages={reanalyze.job?.messages || []} running /> :
-          a.understanding?.summary ? <UnderstandingBlock u={a.understanding} /> :
+          a.understanding?.summary ? <UnderstandingBlock u={a.understanding} hideSummary={!!purpose && purpose === a.understanding.summary} /> :
             <div className="ev-muted ev-small">No AI summary yet. Click Re-analyse to let the AI read the code.</div>}
       </Card>
 
-      <Card title="Modules" icon="dimension"><ModuleCards modules={a.modules} /></Card>
+      <div className="ev-ov__pair">
+        <Card title="Suggested changes" icon="lightbulb" subtitle="Pick one to start an AI request"
+          actions={mayEdit && <Button design="Transparent" icon="refresh" disabled={suggest.running}
+            onClick={() => suggest.start("api/jobs/robot-suggest", { project_id: pid }).catch((e) => toast(e.message, "error"))}>
+            {suggest.running ? "Thinking…" : "Suggest again"}</Button>}>
+          {suggest.running ? <LiveTimeline messages={suggest.job?.messages.length ? suggest.job.messages : ["Reading the project…"]} running /> :
+            sugg.length ? (
+              <>
+                <div className="ev-sugg">{(allSugg ? sugg : sugg.slice(0, 4)).map((s, i) => (
+                  <div key={i} className="ev-sugg__row">
+                    <div><b>{s.title}</b><span>{s.why}</span></div>
+                    <Button icon="ai" design="Transparent" disabled={!mayEdit} onClick={() => onAsk(s.request)}>Ask AI</Button>
+                  </div>
+                ))}</div>
+                {sugg.length > 4 && <button className="ev-linkbtn ev-scn__more" style={{ marginTop: ".4rem" }} onClick={() => setAllSugg(!allSugg)}>
+                  {allSugg ? "Show less" : `Show all ${sugg.length} suggestions`}</button>}
+              </>
+            ) : <div className="ev-muted ev-small">No suggestions yet. Click Suggest again.</div>}
+        </Card>
+        <Card title="Needs attention" icon="alert" subtitle={findings.length ? `${findings.length} finding${findings.length === 1 ? "" : "s"}` : "All clear"}>
+          {findings.length ? <Findings findings={findings} /> : (
+            <div className="ev-ov__clear"><Icon name="message-success" /><div><b>Nothing needs attention</b><span>The analysis found no problems in this project.</span></div></div>
+          )}
+        </Card>
+      </div>
 
-      <Card title="Suggested changes" icon="lightbulb" subtitle="Improvements the AI proposes for this project. Pick one to start an AI request."
-        actions={mayEdit && <Button design="Transparent" icon="lightbulb" disabled={suggest.running}
-          onClick={() => suggest.start("api/jobs/robot-suggest", { project_id: pid }).catch((e) => toast(e.message, "error"))}>
-          {suggest.running ? "Thinking…" : "Suggest again"}</Button>}>
-        {suggest.running ? <LiveTimeline messages={suggest.job?.messages.length ? suggest.job.messages : ["Reading the project…"]} running /> :
-          sugg.length ? (
-            <div className="ev-sugg">{sugg.map((s, i) => (
-              <div key={i} className="ev-sugg__row">
-                <div><b>{s.title}</b><span>{s.why}</span></div>
-                <Button icon="ai" disabled={!mayEdit} onClick={() => onAsk(s.request)}>Ask AI</Button>
-              </div>
-            ))}</div>
-          ) : <div className="ev-muted ev-small">No suggestions yet.</div>}
-      </Card>
-
-      <Card title="Needs attention" icon="alert"><Findings findings={a.findings} /></Card>
-    </>
+      <Card title="Modules" icon="dimension" subtitle="What the studio can do with each part"><ModuleCards modules={a.modules} /></Card>
+    </div>
   );
 }
 
