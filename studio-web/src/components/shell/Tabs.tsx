@@ -1,4 +1,5 @@
-// Navigation bar: pill tabs with a sliding highlight, optionally in groups split by a divider.
+// Navigation bar: pill tabs with a sliding highlight, optionally in groups split by a divider. Always one line:
+// as space runs out the spacing tightens, then the secondary group shows icons (+ counts) only.
 import { Fragment } from "react";
 import { motion } from "framer-motion";
 import { Icon } from "@ui5/webcomponents-react";
@@ -12,25 +13,28 @@ export function Tabs({ tabs, value, onChange, id = "tabs" }: { tabs: TabDef[]; v
     groups[groups.length - 1].push(t);
   });
   return (
-    <nav className="ev-tabs" role="tablist" aria-label="Sections">
-      {groups.map((g, gi) => (
-        <Fragment key={gi}>
-          {gi > 0 && <span className="ev-tabs__sep" aria-hidden="true" />}
-          <div className="ev-tabs__group">
-            {g.map((t) => {
-              const on = value === t.key;
-              return (
-                <button key={t.key} role="tab" aria-selected={on} className={"ev-tab" + (on ? " is-active" : "")} onClick={() => onChange(t.key)}>
-                  {on && <motion.span layoutId={`${id}-pill`} className="ev-tab__pill" transition={{ type: "spring", stiffness: 500, damping: 40 }} />}
-                  {t.icon && <Icon name={t.icon} className="ev-tab__icon" />}
-                  <span>{t.text}</span>
-                  {t.count !== undefined && <span className="ev-tab__count">{t.count}</span>}
-                </button>
-              );
-            })}
-          </div>
-        </Fragment>
-      ))}
-    </nav>
+    <div className="ev-tabs-wrap">
+      <nav className="ev-tabs" role="tablist" aria-label="Sections">
+        {groups.map((g, gi) => (
+          <Fragment key={gi}>
+            {gi > 0 && <span className="ev-tabs__sep" aria-hidden="true" />}
+            <div className={"ev-tabs__group" + (gi > 0 ? " is-secondary" : "")}>
+              {g.map((t) => {
+                const on = value === t.key;
+                return (
+                  <button key={t.key} role="tab" aria-selected={on} aria-label={t.text} title={t.text}
+                    className={"ev-tab" + (on ? " is-active" : "")} onClick={() => onChange(t.key)}>
+                    {on && <motion.span layoutId={`${id}-pill`} className="ev-tab__pill" transition={{ type: "spring", stiffness: 500, damping: 40 }} />}
+                    {t.icon && <Icon name={t.icon} className="ev-tab__icon" />}
+                    <span className="ev-tab__label">{t.text}</span>
+                    {t.count !== undefined && <span className="ev-tab__count">{t.count}</span>}
+                  </button>
+                );
+              })}
+            </div>
+          </Fragment>
+        ))}
+      </nav>
+    </div>
   );
 }
