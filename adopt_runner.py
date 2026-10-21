@@ -613,6 +613,18 @@ def _web_build(mod: Dict, tmp: str, env: Dict[str, str], say) -> Tuple[str, str]
     return cands[0], ""
 
 
+RUNNABLE = ("node-api", "python", "cap-srv", "java")     # never the approuter / HTML5 deployer: they need BTP
+
+
+def _is_gateway_cmd(cmd: str, mods: List[Dict]) -> bool:
+    """A run command that would start an application router or HTML5 deployer."""
+    if re.search(r"approuter|html5-app-deployer", cmd, re.I):
+        return True
+    m = re.match(r"\s*cd\s+([^&]+?)\s*&&", cmd)
+    folder = (m.group(1).strip().strip("/\\") + "/") if m else ""
+    return any(x["kind"] in ("approuter", "html5-deployer") and x["path"] == folder for x in mods)
+
+
 def start_preview(files: Dict[str, str], analysis: Dict, brief: Dict, say: Callable[[str], None] = lambda m: None) -> Dict:
     """Start the project in a sandbox; returns {preview_id, port, entry, kind, mock_auth}."""
     _reap()
@@ -621,6 +633,8 @@ def start_preview(files: Dict[str, str], analysis: Dict, brief: Dict, say: Calla
     entry_mod = next((m for m in mods if m["id"] == (brief or {}).get("entry")), None) or \
         next((m for m in mods if m["role"] == "ui"), None)
     cap = next((m for m in mods if m["kind"] == "cap-srv"), None)
+    if cap and mode in ("run-services", "web-build", "mock"):
+        mode = "cap-sqlite"                    # CAP serves its own UIs; an approuter needs BTP destinations
     if not mode:
         mode = "cap-sqlite" if cap else "mock" if entry_mod and entry_mod["kind"] in ("ui5", "fe", "ovp") else \
             "web-build" if entry_mod else "run-services"
@@ -726,8 +740,7 @@ server:
             if err:
                 raise RuntimeError(err)
             api = ""
-            run = commands_from_brief(brief, "run") or [m["commands"]["run"] for m in mods
-                                                        if m["kind"] in ("node-api", "python") and m["commands"].get("run")]
+            run = [c for c in commands_from_brief(brief, "run") if not _is_gateway_cmd(c, mods)] or                 [m["commands"]["run"] for m in mods if m["kind"] in ("node-api", "python") and m["commands"].get("run")]
             if run:                                   # full stack: the API behind /api
                 api_port = bv._free_port()
                 svc_env = env
@@ -757,9 +770,28 @@ server:
             stops.append(stop)
             info.update(port=port, entry="/")
         else:
-            run = commands_from_brief(brief, "run") or [m["commands"]["run"] for m in mods if m["commands"].get("run")]
+            run = [c for c in commands_from_brief(brief, "run") if not _is_gateway_cmd(c, mods)] or \
+                [m["commands"]["run"] for m in mods if m["kind"] in RUNNABLE and m["commands"].get("run")]
             if not run:
-                raise RuntimeError("No run command — add one under 'How is the service started?' in the brief.")
+                ui = entry_mod if entry_mod and entry_mod["kind"] in ("static", "ui5", "fe", "ovp") else None
+                pages = sorted((p for p in files if p.endswith("index.html") and "node_modules/" not in p), key=len)
+                if ui or pages:                        # nothing to run: serve the UI files as they are
+                    root = (os.path.join(tmp, *ui["path"].split("/")) if ui["path"] else tmp) if ui else \
+                        os.path.join(tmp, *os.path.dirname(pages[0]).split("/")) if os.path.dirname(pages[0]) else tmp
+                    webapp = os.path.join(root, "webapp")
+                    serve_dir = webapp if os.path.isdir(webapp) else root
+                    if ui and ui.get("manifest"):
+                        _fix_ui5_app(root, os.path.join(tmp, *ui["manifest"].split("/")), ui.get("ui5_version", ""), False)
+                    say("No service to start — serving the UI files (backend calls will not answer).")
+                    port, stop = _static_server(serve_dir)
+                    stops.append(stop)
+                    info.update(port=port, entry="/", kind="static")
+                    with _PLOCK:
+                        _PREVIEWS[pid] = info
+                    return {k: info[k] for k in ("preview_id", "port", "entry", "kind")} | {"services": []}
+                raise RuntimeError("Nothing in this project can be started for a preview (an application router alone needs "
+                                   "BTP destinations). Add the service start command under 'How is the service started?' "
+                                   "in the project brief.")
             if _uses_python(run, analysis):
                 env = _python_venv(tmp, env)
                 for c in commands_from_brief(brief):

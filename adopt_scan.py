@@ -578,6 +578,8 @@ def detect_modules(files: Dict[str, str]) -> Tuple[List[Dict], Dict]:
         ts = "typescript" in deps or (root + "tsconfig.json") in files
         cmds = _node_commands(files, root, pkg)
         name = pkg.get("name") or root.strip("/") or "app"
+        if "@sap/approuter" in deps or "@sap/html5-app-deployer" in deps:
+            cmds.pop("run", None)                 # a gateway / deployer is never the app to start in a preview
         if "@sap/approuter" in deps:
             routes = len((_json(files, root + "xs-app.json").get("routes") or []))
             mods.append(_module("approuter:" + root, root.strip("/") or "approuter", root, "approuter", "SAP application router",
