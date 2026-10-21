@@ -126,6 +126,62 @@ def list_cf_apps(cf_home: Optional[str] = None) -> List[Dict]:
     return apps
 
 
+def cf_api(path: str, cf_home: Optional[str] = None) -> Dict:
+    """GET on the CF v3 API with the session in cf_home."""
+    import requests
+    token = _cf_run(["oauth-token"], cf_home=cf_home).strip().splitlines()[-1]
+    api = ""
+    for line in _cf_run(["api"], cf_home=cf_home).splitlines():
+        m = re.search(r"(https://\S+)", line)
+        if m:
+            api = m.group(1).rstrip("/")
+            break
+    r = requests.get(api + path, headers={"Authorization": token}, timeout=60)
+    r.raise_for_status()
+    return r.json()
+
+
+def cf_app_info(name: str, cf_home: Optional[str] = None) -> Dict:
+    """Routes, approuter destinations (name + URL only — never credentials), bound service names and the
+    names of user-provided environment variables of a deployed app."""
+    guid = _cf_run(["app", name, "--guid"], cf_home=cf_home).strip()
+    env = cf_api(f"/v3/apps/{guid}/env", cf_home)
+    ev = env.get("environment_variables") or {}
+    dests = []
+    try:
+        for d in json.loads(ev.get("destinations") or "[]"):
+            if d.get("name") and d.get("url"):
+                dests.append({"name": d["name"], "url": d["url"]})
+    except ValueError:
+        pass
+    vcap = ((env.get("system_env_json") or {}).get("VCAP_SERVICES")) or {}
+    services = [{"label": label, "name": s.get("name", "")} for label, items in vcap.items() for s in items]
+    routes = ["https://" + r["url"] for r in cf_api(f"/v3/apps/{guid}/routes", cf_home).get("resources", []) if r.get("url")]
+    return {"name": name, "guid": guid, "routes": routes, "destinations": dests, "services": services,
+            "env_names": sorted(k for k in ev if k not in ("destinations", "DEPLOY_ATTRIBUTES"))}
+
+
+def cf_app_for_url(url: str, cf_home: Optional[str] = None) -> str:
+    """Name of the app in the targeted org that serves `url` ('' when none / not visible)."""
+    from urllib.parse import urlparse
+    host = (urlparse(url).hostname or "")
+    if not host or "." not in host:
+        return ""
+    sub, domain = host.split(".", 1)
+    try:
+        routes = cf_api(f"/v3/routes?hosts={sub}&per_page=20", cf_home).get("resources", [])
+        for r in routes:
+            if (r.get("url") or "").split("/")[0] != host:
+                continue
+            for d in r.get("destinations") or []:
+                guid = (d.get("app") or {}).get("guid")
+                if guid:
+                    return cf_api(f"/v3/apps/{guid}", cf_home).get("name", "")
+    except Exception:  # noqa: BLE001 — another org / no permission: treated as external
+        return ""
+    return ""
+
+
 def download_cf_app(name: str, cf_home: Optional[str] = None) -> bytes:
     """ZIP of the source package of a deployed CF app (what `cf push` / MTA uploaded)."""
     import requests

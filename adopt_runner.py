@@ -280,7 +280,7 @@ def _cap_smoke(analysis: Dict, tmp: str, env: Dict[str, str], rep) -> None:
             for svc, path in served[:8]:
                 url = f"http://127.0.0.1:{srv['port']}{path.rstrip('/')}/$metadata"
                 try:
-                    r = requests.get(url, timeout=20, auth=("alice", ""))
+                    r = requests.get(url, timeout=20, auth=mock_user(root))
                     if r.status_code == 200:
                         detail.append(f"{svc} {path}: $metadata OK")
                     elif r.status_code in (401, 403):
@@ -293,6 +293,24 @@ def _cap_smoke(analysis: Dict, tmp: str, env: Dict[str, str], rep) -> None:
                     "\n".join(failed + detail) or "server started (no services listed)", True, time.time() - t0)
         finally:
             srv["stop"]()
+
+
+def mock_user(root: str) -> Tuple[str, str]:
+    """A mocked-auth user of the project (cds.requires.auth.users): 'admin' if defined, else the user with the
+    most roles; CAP's default 'alice' when the project defines none."""
+    users: Dict = {}
+    for f in ("package.json", ".cdsrc.json"):
+        try:
+            j = json.load(open(os.path.join(root, f), encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        auth = ((j.get("cds", j) if f == "package.json" else j).get("requires") or {}).get("auth") or {}
+        if isinstance(auth, dict) and isinstance(auth.get("users"), dict):
+            users.update(auth["users"])
+    if not users:
+        return ("alice", "")
+    name = "admin" if "admin" in users else max(users, key=lambda u: len((users[u] or {}).get("roles") or []))
+    return (name, str((users[name] or {}).get("password") or ""))
 
 
 def ensure_sqlite(root: str, env: Dict[str, str], rep=None) -> Tuple[bool, str]:
@@ -672,7 +690,7 @@ def start_preview(files: Dict[str, str], analysis: Dict, brief: Dict, say: Calla
             info["log"] = srv["log"]()
             if not up:
                 raise RuntimeError("The CAP service did not start:\n" + _tail_err(srv["log"]()))
-            info.update(port=srv["port"], mock_auth=("alice", ""), log_fn=srv["log"],
+            info.update(port=srv["port"], mock_auth=mock_user(root), log_fn=srv["log"],
                         services=[{"name": s, "path": p} for s, p in served])
             if not entry_mod:
                 info["entry"] = "/"
@@ -789,9 +807,16 @@ server:
                     with _PLOCK:
                         _PREVIEWS[pid] = info
                     return {k: info[k] for k in ("preview_id", "port", "entry", "kind")} | {"services": []}
-                raise RuntimeError("Nothing in this project can be started for a preview (an application router alone needs "
-                                   "BTP destinations). Add the service start command under 'How is the service started?' "
-                                   "in the project brief.")
+                src = analysis.get("source") or {}
+                dest = ", ".join(f"{x['destination']} → {x['url']}" for x in src.get("external") or [])
+                if any(m["kind"] == "approuter" for m in mods):
+                    raise RuntimeError(
+                        "This project is only an application router: its screens and services come from the application "
+                        "behind it" + (f" ({dest})" if dest else "") + ". Adopt that application (from Cloud Foundry pick the "
+                        "router again — its backend is now adopted with it — or adopt the backend app / Git repository)"
+                        + (f". The deployed app is at {src['url']}" if src.get("url") else "") + ".")
+                raise RuntimeError("Nothing in this project can be started for a preview. Add the service start command "
+                                   "under 'How is the service started?' in the project brief.")
             if _uses_python(run, analysis):
                 env = _python_venv(tmp, env)
                 for c in commands_from_brief(brief):

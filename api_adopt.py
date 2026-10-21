@@ -169,8 +169,10 @@ def register(app, h: Dict[str, Any]) -> None:
             import api_deploy
             d = api_deploy.deployer(u, "dev", say)
             say(f"Downloading {source.get('app')} from Cloud Foundry…")
-            files, info = adopt_files.from_cf(source.get("app", ""), d.cf_home)
-            src = {"kind": "cf", "label": source.get("app", ""), "app": source.get("app", "")}
+            files, info = adopt_files.from_cf(source.get("app", ""), d.cf_home, say)
+            related = [r["app"] for r in info.get("related") or []]
+            src = {"kind": "cf", "label": " + ".join([source.get("app", "")] + related), "app": source.get("app", ""),
+                   "url": info.get("cf_url", ""), "related": info.get("related") or [], "external": info.get("external") or []}
         else:
             raise ValueError("Choose a source: zip, git or cf.")
         say(f"{info['files']} files ({info['bytes'] // 1024} KB)" + (f", {len(info['skipped'])} skipped" if info["skipped"] else ""))

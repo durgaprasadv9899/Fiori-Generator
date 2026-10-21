@@ -505,7 +505,10 @@ function TryIt({ info, preview, setPreview, job, err, onStart }: {
       {err && job.job?.messages?.length ? <pre className="ev-log" style={{ marginBottom: ".8rem" }}>{job.job.messages.join("\n")}</pre> : null}
       <EmptyState icon="play" title="Run the app in the sandbox"
         text={`Starts version ${info.version.number} with the preview setup from the project brief. Nothing is deployed.`}
-        action={<Button design="Emphasized" icon="play" disabled={!info.runner?.ok} onClick={onStart}>Start preview</Button>} />
+        action={<div className="ev-row" style={{ justifyContent: "center" }}>
+          <Button design="Emphasized" icon="play" disabled={!info.runner?.ok} onClick={onStart}>Start preview</Button>
+          {info.source?.url && <a className="ev-linkbtn" href={info.source.url} target="_blank" rel="noreferrer">Open the deployed app ↗</a>}
+        </div>} />
       {!info.runner?.ok && <div className="ev-muted ev-small" style={{ textAlign: "center" }}>The sandbox is not available, so the app cannot be started here.</div>}
     </Card>
   );
@@ -520,6 +523,7 @@ function TryIt({ info, preview, setPreview, job, err, onStart }: {
         <span className="ev-spacer" />
         <Button design="Transparent" icon="refresh" onClick={() => setFrameKey((k) => k + 1)}>Reload</Button>
         <a href={preview.url} target="_blank" rel="noreferrer" className="ev-linkbtn"><Icon name="action" style={{ width: ".8rem", height: ".8rem", color: "inherit" }} /> Open in a new tab</a>
+        {info.source?.url && <a href={info.source.url} target="_blank" rel="noreferrer" className="ev-linkbtn">Deployed app ↗</a>}
         <Button design="Transparent" icon="document-text" onClick={showLog}>Log</Button>
         <Button design="Transparent" icon="restart" onClick={onStart}>Restart</Button>
         <Button design="Transparent" icon="stop" onClick={stop}>Stop</Button>

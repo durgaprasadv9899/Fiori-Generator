@@ -749,6 +749,18 @@ def env_vars(files: Dict[str, str]) -> List[str]:
 
 def findings(files: Dict[str, str], mods: List[Dict], ctx: Dict, dests: List[Dict], src_info: Dict) -> List[Dict]:
     out = []
+    for r in src_info.get("related") or []:
+        out.append({"severity": "info", "text": f"Adopted together with {r['app']}: the router's destination {r['destination']} "
+                                                f"points to it ({r['url']}).",
+                    "fix": "Preview, checks and AI changes cover the whole application — router, UI and service."})
+    for x in src_info.get("external") or []:
+        out.append({"severity": "warn", "text": f"Destination {x['destination']} points to {x['url']}, which is not an app in "
+                                                "this Cloud Foundry space, so it was not adopted.",
+                    "fix": "Adopt that application separately (or from Git) if you want to preview or change it."})
+    kinds = {m["kind"] for m in mods}
+    if mods and kinds <= {"approuter", "html5-deployer", "config"}:
+        out.append({"severity": "bad", "text": "This project is only an application router — it has no screens or services of its own.",
+                    "fix": "Adopt the application behind it (its backend / UI app) so the preview and AI changes have something to work on."})
     for s in src_info.get("skipped") or []:
         if s["why"].startswith("secrets"):
             out.append({"severity": "bad", "text": f"{s['path']} looks like it holds credentials and was not imported.",

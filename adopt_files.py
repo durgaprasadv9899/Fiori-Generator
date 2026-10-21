@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import base64
 import io
+import json
 import os
 import re
 import shutil
@@ -308,7 +309,7 @@ def open_pull_request(url: str, token: str, base: str, head: str, title: str, bo
 # ─────────────────────────────────────────────────────────────────────────────
 # Cloud Foundry
 # ─────────────────────────────────────────────────────────────────────────────
-def from_cf(app_name: str, cf_home: Optional[str]) -> Tuple[Dict[str, str], Dict]:
+def _cf_download(app_name: str, cf_home: Optional[str]) -> Tuple[Dict[str, str], Dict]:
     import app_import
     try:
         data = app_import.download_cf_app(app_name, cf_home=cf_home)
@@ -319,8 +320,78 @@ def from_cf(app_name: str, cf_home: Optional[str]) -> Tuple[Dict[str, str], Dict
     if all(p.startswith("app/") for p in files) and any(p in files for p in ("app/package.json", "app/manifest.json",
                                                                               "app/requirements.txt")):
         files = {p[4:]: c for p, c in files.items()}
-    info.update(cf_app=app_name)
     return files, info
+
+
+def is_router(files: Dict[str, str]) -> bool:
+    """An SAP application router package: xs-app.json + @sap/approuter, no service or UI sources of its own."""
+    try:
+        pkg = json.loads(files.get("package.json") or "{}")
+    except ValueError:
+        pkg = {}
+    deps = dict(pkg.get("dependencies") or {}, **(pkg.get("devDependencies") or {}))
+    return "xs-app.json" in files and "@sap/approuter" in deps and "@sap/cds" not in deps
+
+
+def _router_folder(backend: Dict[str, str]) -> str:
+    """Where the router lives in the backend's own MTA (so the merged project matches the source tree)."""
+    try:
+        import yaml
+        mta = yaml.safe_load(backend.get("mta.yaml") or "") or {}
+        for m in mta.get("modules") or []:
+            if m.get("type") == "approuter.nodejs" and m.get("path"):
+                return m["path"].strip("./").rstrip("/") + "/"
+    except Exception:  # noqa: BLE001
+        pass
+    return "router/"
+
+
+def from_cf(app_name: str, cf_home: Optional[str], say=lambda m: None) -> Tuple[Dict[str, str], Dict]:
+    """A deployed app. An application router is followed to the apps its destinations point to (same space),
+    and router + backends are adopted as ONE project — the router alone has no screens or services."""
+    import app_import
+    files, info = _cf_download(app_name, cf_home)
+    try:
+        meta = app_import.cf_app_info(app_name, cf_home)
+    except Exception:  # noqa: BLE001 — download worked; the extra info is optional
+        meta = {"routes": [], "destinations": [], "services": [], "env_names": []}
+    info.update(cf_app=app_name, cf_url=(meta["routes"] or [""])[0], cf_services=meta["services"],
+                cf_env_names=meta["env_names"], related=[], external=[])
+    if not is_router(files) or not meta["destinations"]:
+        return files, info
+    say(f"{app_name} is an application router — following its destinations to the apps behind it…")
+    merged: Dict[str, str] = {}
+    backends = []
+    for d in meta["destinations"]:
+        target = app_import.cf_app_for_url(d["url"], cf_home)
+        if not target or target == app_name or target in [b[0] for b in backends]:
+            if not target:
+                info["external"].append({"destination": d["name"], "url": d["url"]})
+            continue
+        say(f"Destination {d['name']} → {target}: downloading…")
+        try:
+            bfiles, binfo = _cf_download(target, cf_home)
+        except SourceError as e:
+            info["external"].append({"destination": d["name"], "url": d["url"], "error": str(e)[:200]})
+            continue
+        backends.append((target, bfiles))
+        info["related"].append({"app": target, "destination": d["name"], "url": d["url"]})
+    if not backends:
+        return files, info
+    main_name, main_files = backends[0]
+    merged.update(main_files)                                   # the backend carries the project (app/, srv/, db/, mta.yaml)
+    folder = _router_folder(main_files)
+    if not any(p.startswith(folder) and p.endswith("xs-app.json") for p in main_files):
+        for p, c in files.items():
+            merged[folder + p] = c
+    for other, ofiles in backends[1:]:
+        for p, c in ofiles.items():
+            merged[f"{other}/{p}"] = c
+    info["files"] = len(merged)
+    info["bytes"] = sum(len(c) for c in merged.values())
+    info["router_folder"] = folder
+    say(f"Adopting {app_name} together with {', '.join(b[0] for b in backends)} as one project.")
+    return merged, info
 
 
 # ─────────────────────────────────────────────────────────────────────────────

@@ -84,6 +84,7 @@ export interface MissionSummary {
 }
 export interface AdoptProjectInfo {
   project: Project; version: VersionMeta; analysis: Analysis; brief: Answers;
+  source?: { kind?: string; url?: string; label?: string; related?: { app: string; destination: string; url: string }[] };
   missions: MissionSummary[]; runner: { mode: "local" | "remote"; node?: string; python?: string; ok: boolean };
 }
 export interface PreviewInfo { preview_id: string; url: string; kind: string; entry: string; log: string }
