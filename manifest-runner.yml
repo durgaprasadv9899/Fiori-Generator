@@ -5,7 +5,7 @@ applications:
   # Only the studio API calls /jobs, /sessions, /artifacts (shared secret RUNNER_TOKEN, set with cf set-env);
   # browsers open previews through signed, expiring /p/<token>/ links.
   - name: evoke-studio-runner
-    memory: 2G
+    memory: 4G
     disk_quota: 4G
     instances: 1
     buildpacks:

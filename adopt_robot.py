@@ -735,15 +735,42 @@ def _run_rounds(m: Dict, ws: Workspace, msgs: List[Dict], converse, analysis: Di
                 pass
 
 
+def _mark_preexisting(report: Dict, baseline: set) -> Dict:
+    """Checks that also fail on the original version are not caused by the change: shown as warnings,
+    never blocking."""
+    if not baseline:
+        return report
+    checks = []
+    for c in report.get("checks", []):
+        if c["status"] == "failed" and c["name"] in baseline:
+            c = dict(c, status="warning", critical=False,
+                     detail="Already failing before this change (pre-existing) — not caused by the AI change.\n" + (c.get("detail") or ""))
+        checks.append(c)
+    summary = {k: sum(1 for c in checks if c["status"] == s) for k, s in
+               (("passed", "passed"), ("failed", "failed"), ("warnings", "warning"), ("not_tested", "not_tested"))}
+    out = dict(report, checks=checks, summary=summary)
+    out["blocking"] = [c["name"] for c in checks if c.get("critical") and c["status"] == "failed"]
+    return out
+
+
 def _rounds(m: Dict, ws: Workspace, msgs: List[Dict], converse, checks_fn, say, step) -> Dict:
     final = _loop(converse, _SYS_RUN, msgs, RUN_TOOLS, ws, "finish", MAX_STEPS_RUN, step, say)
     m["summary"] = final.get("summary", "")
     m["criteria_results"] = final.get("criteria_results") or []
     m["_files"] = ws.changes
     save(m)
+    baseline: Optional[set] = None
     while checks_fn and ws.changes:
         step("check", "Running the project's build and test commands in the sandbox…")
         report = checks_fn(ws.files(), say)
+        failed = [c for c in report.get("checks", []) if c["status"] == "failed"]
+        if failed and baseline is None:
+            step("check", "Some checks fail — running them on the original version to see what was already failing…")
+            base_rep = checks_fn(ws.base, say)
+            baseline = {c["name"] for c in base_rep.get("checks", []) if c["status"] == "failed"}
+            if baseline:
+                step("check", "Already failing before this change: " + ", ".join(sorted(baseline))[:300], True)
+        report = _mark_preexisting(report, baseline or set())
         m["checks"] = report
         failed = [c for c in report.get("checks", []) if c["status"] == "failed"]
         step("check", f"Checks: {report['summary']['passed']} passed · {report['summary']['failed']} failed · "

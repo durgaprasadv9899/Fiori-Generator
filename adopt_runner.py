@@ -54,7 +54,7 @@ def child_env(extra: Optional[Dict[str, str]] = None) -> Dict[str, str]:
     os.makedirs(cache, exist_ok=True)
     env.update({"npm_config_cache": cache, "npm_config_audit": "false", "npm_config_fund": "false",
                 "npm_config_update_notifier": "false", "npm_config_loglevel": "error", "CI": "true",
-                "BROWSERSLIST_IGNORE_OLD_DATA": "1", "NODE_OPTIONS": "--max-old-space-size=1536",
+                "BROWSERSLIST_IGNORE_OLD_DATA": "1", "NODE_OPTIONS": "--max-old-space-size=2560",
                 "PIP_DISABLE_PIP_VERSION_CHECK": "1", "PIP_CACHE_DIR": os.path.join(bv.data_dir(), "pip-cache"),
                 "PYTHONDONTWRITEBYTECODE": "1", "CDS_PLUGIN_UI5_ACTIVE": "false", "NG_CLI_ANALYTICS": "false",
                 "NEXT_TELEMETRY_DISABLED": "1"})
@@ -237,8 +237,27 @@ def _run_commands(cmds: List[str], tmp: str, env: Dict[str, str], rep, results: 
             else "test" if re.search(r"\b(test|pytest|jest|vitest|karma|mocha)\b", low) else "build"
         cid = f"cmd.{i + 1}"
         t0 = time.time()
+        m_cd = re.match(r"\s*cd\s+([^&]+?)\s*&&", cmd)
+        folder = os.path.join(tmp, *m_cd.group(1).strip().strip("/\\").split("/")) if m_cd else tmp
+        if cat != "install" and re.search(r"\bnpm (run|test)\b|\bnpx\b", low) and \
+                os.path.exists(os.path.join(folder, "package.json")) and not os.path.isdir(os.path.join(folder, "node_modules")):
+            # the brief has no install step for this folder: install first, or every build/test fails
+            lock = os.path.exists(os.path.join(folder, "package-lock.json"))
+            rep.say(f"Installing dependencies in {os.path.relpath(folder, tmp)} first…")
+            _shell("npm ci" if lock else "npm install", folder, env, min(600, rep.remaining() - 30))
         rep.say(f"Running: {cmd}")
         code, out = _shell(cmd, tmp, env, min(600, rep.remaining() - 30))
+        if code != 0 and "pytest" in low and re.search(r"No module named pytest", out):
+            rep.say("pytest is not in the requirements — installing it for the test run…")
+            _shell("python -m pip install -q pytest", folder, env, 300)
+            code, out = _shell(cmd, tmp, env, min(600, rep.remaining() - 30))
+        if code != 0 and "heap out of memory" in out:
+            rep.say("The build ran out of memory — retrying with a larger Node.js heap…")
+            code, out = _shell(cmd, tmp, dict(env, NODE_OPTIONS="--max-old-space-size=3584"), min(900, rep.remaining() - 30))
+        if code == 5 and "pytest" in low:                         # pytest: no tests collected
+            rep.add(cid, cmd, cat, "not_tested", "pytest found no tests to run.\n" + out.strip()[-400:], False, time.time() - t0)
+            results[cmd] = 0
+            continue
         if code != 0 and re.match(r"(cd [^&]+&&\s*)?npm ci\b", cmd) and ("in sync" in out or "package-lock" in out
                                                                        or "EUSAGE" in out):
             rep.say("package-lock.json is out of sync — retrying with npm install…")
