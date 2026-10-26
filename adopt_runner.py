@@ -661,6 +661,48 @@ def _base_aliases(out_dir: str) -> Tuple[str, ...]:
     return tuple(sorted(set(aliases), key=len, reverse=True))
 
 
+_BASENAME_RX = re.compile(r"""basename\s*(?:=\s*\{?\s*|:\s*)["'`](/[^"'`$]*)["'`]""")
+
+
+def _router_basename(front_root: str, out_dir: str = "") -> str:
+    """The path a single-page app's router expects to live under (React Router / Vue Router basename,
+    Angular <base href>), from the source or — when it comes from an environment variable — the built bundle."""
+    hits: List[str] = []
+
+    def scan(base: str, exts: Tuple[str, ...], limit: int = 400):
+        n = 0
+        for r, dirs, names in os.walk(base):
+            dirs[:] = [d for d in dirs if d not in _SKIP_WALK and d not in ("dist", "build", "out", "coverage")]
+            for f in names:
+                if f.endswith(exts) and n < limit:
+                    n += 1
+                    try:
+                        hits.extend(_BASENAME_RX.findall(open(os.path.join(r, f), encoding="utf-8", errors="replace").read()))
+                    except OSError:
+                        pass
+    src = os.path.join(front_root, "src")
+    scan(src if os.path.isdir(src) else front_root, (".tsx", ".ts", ".jsx", ".js", ".vue"))
+    if not hits and out_dir:
+        for r, _, names in os.walk(out_dir):
+            for f in names:
+                if f.endswith((".js", ".mjs")):
+                    try:
+                        hits.extend(_BASENAME_RX.findall(open(os.path.join(r, f), encoding="utf-8", errors="replace").read()))
+                    except OSError:
+                        pass
+    hits = [h.rstrip("/") for h in hits if h not in ("/", "")]
+    if hits:
+        return max(set(hits), key=hits.count) + "/"
+    try:                                                   # Angular: <base href="/x/"> in the built page
+        html = open(os.path.join(out_dir or front_root, "index.html"), encoding="utf-8", errors="replace").read()
+        m = re.search(r"""<base\s+href=["'](/[^"']+)["']""", html)
+        if m and m.group(1) != "/":
+            return m.group(1)
+    except OSError:
+        pass
+    return ""
+
+
 def _static_server(root: str, proxy_to: str = "") -> Tuple[int, Callable[[], None]]:
     handler = type("H", (_StaticHandler,), {"root": root, "proxy_to": proxy_to, "aliases": _base_aliases(root)})
     srv = socketserver.ThreadingTCPServer(("127.0.0.1", 0), handler)
@@ -989,12 +1031,15 @@ server:
                 else:
                     say("The API did not start — the web app runs without it (see Log).")
             if dev:                                    # the dev server serves the app (and proxies /api itself)
-                info.update(port=dev, entry=vbase or "/", kind="dev-server")
+                info.update(port=dev, entry=_router_basename(os.path.join(tmp, *entry_mod["path"].split("/")) if entry_mod["path"] else tmp)
+                            or vbase or "/", kind="dev-server")
             else:
                 port, stop = _static_server(out_dir, api)
                 stops.append(stop)
-                aliases = _base_aliases(out_dir)          # built with a base path: open the app under it
-                info.update(port=port, entry=(aliases[-1] if aliases else "/"))
+                aliases = _base_aliases(out_dir)
+                froot = os.path.join(tmp, *entry_mod["path"].split("/")) if entry_mod["path"] else tmp
+                router_base = _router_basename(froot, out_dir)   # where the app's router expects to run
+                info.update(port=port, entry=router_base or (aliases[-1] if aliases else "/"))
         else:
             run = [c for c in commands_from_brief(brief, "run") if not _is_gateway_cmd(c, mods)] or \
                 [m["commands"]["run"] for m in mods if m["kind"] in RUNNABLE and m["commands"].get("run")]
