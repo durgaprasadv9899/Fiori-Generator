@@ -448,7 +448,7 @@ def register(app, h: Dict[str, Any]) -> None:
         _PREVIEWS[r["preview_id"]] = {"owner": u.id, "project_id": pid, "started": time.time()}
         say("Preview is running.")
         return {"preview_id": r["preview_id"], "url": adopt_client.preview_url(r), "kind": r.get("kind"),
-                "entry": r.get("entry"), "services": r.get("services") or []}
+                "entry": r.get("entry"), "services": r.get("services") or [], "warnings": r.get("warnings") or []}
 
     @app.post("/api/jobs/adopt-preview")
     def job_adopt_preview(body: Dict = Body(...), user: User = Depends(current_user)):

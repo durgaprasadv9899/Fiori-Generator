@@ -528,6 +528,12 @@ function TryIt({ info, preview, setPreview, job, err, onStart }: {
         <Button design="Transparent" icon="restart" onClick={onStart}>Restart</Button>
         <Button design="Transparent" icon="stop" onClick={stop}>Stop</Button>
       </div>
+      {(preview.warnings?.length || 0) > 0 && (
+        <MessageStrip design="Critical" hideCloseButton style={{ marginBottom: ".8rem" }}>
+          The page may not render: {preview.warnings!.length} of its files did not load —{" "}
+          {preview.warnings!.slice(0, 3).join(" · ")}{preview.warnings!.length > 3 ? " …" : ""}. Open the Log for details.
+        </MessageStrip>
+      )}
       {log && <pre className="ev-log" style={{ marginBottom: ".8rem" }}>{log}</pre>}
       <DeviceFrame key={frameKey} device={device} src={preview.url} title={preview.entry || preview.url} />
       <div className="ev-muted ev-small" style={{ marginTop: ".6rem" }}>If the preview stays blank, your browser may block third-party cookies — use Open in a new tab.</div>

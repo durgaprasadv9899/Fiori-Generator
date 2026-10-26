@@ -554,8 +554,12 @@ def _fix_ui5_app(app_dir: str, manifest_path: str, version: str, relative_to_roo
 
 
 class _StaticHandler(http.server.SimpleHTTPRequestHandler):
+    """Serves a built single-page app. `aliases` map URL prefixes the page uses (e.g. a Vite base '/static/')
+    onto the build folder; a request the build cannot answer goes to the backend (`proxy_to`) when one runs —
+    /api/* always — and page navigations fall back to index.html."""
     root = "."
-    proxy_to = ""                     # /api/* -> started service (http://127.0.0.1:port)
+    proxy_to = ""
+    aliases: Tuple[str, ...] = ()
 
     def __init__(self, *a, **kw):
         super().__init__(*a, directory=self.root, **kw)
@@ -563,15 +567,33 @@ class _StaticHandler(http.server.SimpleHTTPRequestHandler):
     def log_message(self, *a):        # quiet
         pass
 
-    def send_head(self):
-        path = self.translate_path(self.path)
-        if not os.path.exists(path) and "." not in os.path.basename(self.path.split("?")[0]):
-            self.path = "/index.html"               # single-page app fallback
-        return super().send_head()
+    def _local(self, url_path: str) -> Optional[str]:
+        """The file for url_path (with base-path aliases), or None."""
+        clean = url_path.split("?")[0].split("#")[0]
+        cands = [clean] + [("/" + clean[len(a):].lstrip("/")) for a in self.aliases if clean.startswith(a)]
+        for c in cands:
+            fp = self.translate_path(c)
+            if os.path.isfile(fp) or (os.path.isdir(fp) and os.path.isfile(os.path.join(fp, "index.html"))):
+                return c
+        return None
+
+    def _route(self) -> bool:
+        """True when the request was answered by the backend proxy."""
+        path = self.path
+        if self.proxy_to and (path == "/api" or path.startswith(("/api/", "/api?"))):
+            return self._proxy()
+        local = self._local(path)
+        if local is not None:
+            self.path = local + (("?" + path.split("?", 1)[1]) if "?" in path else "")
+            return False
+        is_page = "." not in os.path.basename(path.split("?")[0]) and "text/html" in (self.headers.get("Accept") or "text/html")
+        if self.proxy_to and not is_page:
+            return self._proxy()                    # e.g. files the backend serves itself
+        if is_page:
+            self.path = "/index.html"               # single-page app navigation
+        return False
 
     def _proxy(self) -> bool:
-        if not self.proxy_to or not (self.path == "/api" or self.path.startswith(("/api/", "/api?"))):
-            return False
         import urllib.error
         import urllib.request
         n = int(self.headers.get("Content-Length") or 0)
@@ -596,26 +618,84 @@ class _StaticHandler(http.server.SimpleHTTPRequestHandler):
         return True
 
     def do_GET(self):
-        if not self._proxy():
+        if not self._route():
             super().do_GET()
 
     def do_HEAD(self):
-        if not self._proxy():
+        if not self._route():
             super().do_HEAD()
 
     def do_POST(self):
-        if not self._proxy():
+        if not (self.proxy_to and self._proxy()):
             self.send_error(405)
 
     do_PUT = do_PATCH = do_DELETE = do_POST
 
 
+_ASSET_RX = re.compile(r"""<(?:script|link)\b[^>]*?\b(?:src|href)\s*=\s*["']([^"'#]+)["']""", re.I)
+
+
+def _page_assets(html: str) -> List[str]:
+    return [u for u in _ASSET_RX.findall(html or "")
+            if not u.startswith(("http:", "https:", "//", "data:")) and not u.endswith((".ico", ".png", ".svg", ".webmanifest", ".json"))]
+
+
+def _base_aliases(out_dir: str) -> Tuple[str, ...]:
+    """URL prefixes the built index.html uses that are not folders of the build (a configured base path)."""
+    try:
+        html = open(os.path.join(out_dir, "index.html"), encoding="utf-8", errors="replace").read()
+    except OSError:
+        return ()
+    aliases = []
+    for u in _page_assets(html):
+        if not u.startswith("/"):
+            continue
+        u = u.split("?")[0]
+        if os.path.isfile(os.path.join(out_dir, *u.strip("/").split("/"))):
+            continue
+        parts = u.strip("/").split("/")
+        for i in range(1, len(parts)):
+            if os.path.isfile(os.path.join(out_dir, *parts[i:])):
+                aliases.append("/" + "/".join(parts[:i]) + "/")
+                break
+    return tuple(sorted(set(aliases), key=len, reverse=True))
+
+
 def _static_server(root: str, proxy_to: str = "") -> Tuple[int, Callable[[], None]]:
-    handler = type("H", (_StaticHandler,), {"root": root, "proxy_to": proxy_to})
+    handler = type("H", (_StaticHandler,), {"root": root, "proxy_to": proxy_to, "aliases": _base_aliases(root)})
     srv = socketserver.ThreadingTCPServer(("127.0.0.1", 0), handler)
     srv.daemon_threads = True
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     return srv.server_address[1], lambda: (srv.shutdown(), srv.server_close())
+
+
+def _self_check(port: int, entry: str, auth=None) -> List[str]:
+    """Load the preview's own entry page and every script / stylesheet it references; return problems
+    (a page whose assets 404 renders blank)."""
+    import requests
+    from urllib.parse import urljoin
+    base = f"http://127.0.0.1:{port}"
+    try:
+        r = requests.get(base + entry, timeout=60, auth=auth, headers={"Accept": "text/html"})
+    except Exception as e:  # noqa: BLE001
+        return [f"The entry page {entry} did not answer: {e}"]
+    if r.status_code >= 400:
+        return [f"The entry page {entry} returned HTTP {r.status_code}."]
+    problems = []
+    if "<script" not in r.text.lower() and len(r.text.strip()) < 200:
+        problems.append(f"The entry page {entry} has no content ({len(r.text)} bytes).")
+    for u in _page_assets(r.text)[:30]:
+        url = urljoin(base + entry, u)
+        try:
+            a = requests.get(url, timeout=60, auth=auth)
+            ctype = a.headers.get("content-type", "")
+            if a.status_code >= 400:
+                problems.append(f"{u} → HTTP {a.status_code}")
+            elif u.split("?")[0].endswith((".js", ".mjs")) and "html" in ctype:
+                problems.append(f"{u} → returned an HTML page instead of JavaScript (wrong base path?)")
+        except Exception as e:  # noqa: BLE001
+            problems.append(f"{u} → {e}")
+    return problems
 
 
 def _web_build(mod: Dict, tmp: str, env: Dict[str, str], say) -> Tuple[str, str]:
@@ -870,6 +950,15 @@ server:
                 if not up:
                     raise RuntimeError("The frontend dev server did not start:\n" + _tail_err(open(dlog, encoding="utf-8", errors="replace").read()))
                 dev = dport
+                vbase = ""
+                for vf in ("vite.config.ts", "vite.config.js", "vite.config.mjs", "vite.config.mts"):
+                    try:
+                        mb = re.search(r"\bbase\s*:\s*['\"`]([^'\"`]+)", open(os.path.join(froot, vf), encoding="utf-8").read())
+                    except OSError:
+                        continue
+                    if mb and mb.group(1).startswith("/"):
+                        vbase = mb.group(1)
+                        break
             elif err:
                 raise RuntimeError(err)
             api = ""
@@ -900,11 +989,12 @@ server:
                 else:
                     say("The API did not start — the web app runs without it (see Log).")
             if dev:                                    # the dev server serves the app (and proxies /api itself)
-                info.update(port=dev, entry="/", kind="dev-server")
+                info.update(port=dev, entry=vbase or "/", kind="dev-server")
             else:
                 port, stop = _static_server(out_dir, api)
                 stops.append(stop)
-                info.update(port=port, entry="/")
+                aliases = _base_aliases(out_dir)          # built with a base path: open the app under it
+                info.update(port=port, entry=(aliases[-1] if aliases else "/"))
         else:
             run = [c for c in commands_from_brief(brief, "run") if not _is_gateway_cmd(c, mods)] or \
                 [m["commands"]["run"] for m in mods if m["kind"] in RUNNABLE and m["commands"].get("run")]
@@ -968,9 +1058,14 @@ server:
                 pass
         _rmtree(tmp)
         raise
+    say("Checking that the page and its scripts load…")
+    info["warnings"] = _self_check(info["port"], info["entry"], tuple(info["mock_auth"]) if info.get("mock_auth") else None)
+    for w in info["warnings"][:5]:
+        say("⚠ " + w)
     with _PLOCK:
         _PREVIEWS[pid] = info
-    return {k: info[k] for k in ("preview_id", "port", "entry", "kind")} | {"services": info.get("services", [])}
+    return {k: info[k] for k in ("preview_id", "port", "entry", "kind")} | {"services": info.get("services", []),
+                                                                          "warnings": info["warnings"]}
 
 
 def posixpath_dir(p: str) -> str:
