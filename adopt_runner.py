@@ -634,20 +634,96 @@ def _web_build(mod: Dict, tmp: str, env: Dict[str, str], say) -> Tuple[str, str]
     pkg = json.load(open(os.path.join(root, "package.json"), encoding="utf-8"))
     if "next" in (pkg.get("dependencies") or {}):
         return "", "Next.js needs its own server; use the run command preview instead."
+    t_build = time.time() - 2
     code, out = _shell("npm run build" if (pkg.get("scripts") or {}).get("build") else "npx vite build", root, env, 900)
     if code != 0:
         return "", "build failed:\n" + _tail_err(out)
-    cands = []
-    for base in ("dist", "build", "out", "www", "public"):
+    found = _find_build_output(root, tmp, pkg, t_build)
+    if not found:
+        return "", "NO_OUTPUT"
+    return found, ""
+
+
+_SKIP_WALK = {"node_modules", ".git", ".venv", "venv", "__pycache__", ".angular", ".cache"}
+
+
+def _index_dirs(base: str) -> List[str]:
+    out = []
+    for r, dirs, names in os.walk(base):
+        dirs[:] = [d for d in dirs if d not in _SKIP_WALK]
+        if "index.html" in names:
+            out.append(r)
+    return out
+
+
+def _configured_out_dirs(root: str, pkg: Dict) -> List[str]:
+    """Output folders the project configures: Vite outDir, Angular outputPath, Vue outputDir, CRA BUILD_PATH,
+    --outDir / --out-dir in the build script."""
+    dirs: List[str] = []
+    script = (pkg.get("scripts") or {}).get("build", "")
+    for m in re.finditer(r"--out-?[dD]ir[= ]+([^\s&;]+)|BUILD_PATH=([^\s&;]+)", script):
+        dirs.append(m.group(1) or m.group(2))
+    for name in ("vite.config.ts", "vite.config.js", "vite.config.mjs", "vite.config.mts", "vite.config.cjs", "vue.config.js"):
+        try:
+            text = open(os.path.join(root, name), encoding="utf-8").read()
+        except OSError:
+            continue
+        for m in re.finditer(r"(?:outDir|outputDir)\s*:\s*['\"`]([^'\"`]+)", text):
+            dirs.append(m.group(1))
+        for m in re.finditer(r"(?:outDir|outputDir)\s*:\s*(?:path\.)?(?:resolve|join)\([^)]*?['\"`]([^'\"`]+)['\"`]\s*\)", text):
+            dirs.append(m.group(1))
+    try:
+        ang = json.load(open(os.path.join(root, "angular.json"), encoding="utf-8"))
+        for proj in (ang.get("projects") or {}).values():
+            op = (((proj.get("architect") or {}).get("build") or {}).get("options") or {}).get("outputPath")
+            op = op.get("base") if isinstance(op, dict) else op
+            if op:
+                dirs.append(op)
+    except (OSError, ValueError):
+        pass
+    return [os.path.normpath(os.path.join(root, d)) for d in dirs if d]
+
+
+def _find_build_output(root: str, tmp: str, pkg: Dict, since: float) -> str:
+    """Folder with the built index.html, wherever the build wrote it (also outside the frontend folder,
+    e.g. a backend's static/ folder)."""
+    def best(dirs: List[str]) -> str:
+        dirs = [d for d in dirs if os.path.exists(os.path.join(d, "index.html"))]
+        dirs.sort(key=lambda r: (0 if r.endswith("browser") else 1, len(r)))
+        return dirs[0] if dirs else ""
+    for d in _configured_out_dirs(root, pkg):                  # 1. what the project configures
+        if os.path.isdir(d) and os.path.realpath(d).startswith(os.path.realpath(tmp)):
+            hit = best(_index_dirs(d))
+            if hit:
+                return hit
+    fresh = [d for d in _index_dirs(tmp)                         # 2. what this build just wrote
+             if os.path.getmtime(os.path.join(d, "index.html")) >= since]
+    hit = best(fresh)
+    if hit:
+        return hit
+    conv = []                                                    # 3. the usual folders
+    for base in ("dist", "build", "out", "www"):
         d = os.path.join(root, base)
         if os.path.isdir(d):
-            for r, _, names in os.walk(d):
-                if "index.html" in names:
-                    cands.append(r)
-    if not cands:
-        return "", "the build produced no index.html (looked in dist/, build/, out/)"
-    cands.sort(key=lambda r: (0 if r.endswith("browser") else 1, len(r)))
-    return cands[0], ""
+            conv += _index_dirs(d)
+    return best(conv)
+
+
+def _dev_server_cmd(root: str, pkg: Dict, port: int) -> str:
+    """Start the frontend's own dev server on `port` (fallback when a build produces no page)."""
+    scripts = pkg.get("scripts") or {}
+    deps = dict(pkg.get("dependencies") or {}, **(pkg.get("devDependencies") or {}))
+    if "vite" in deps:
+        return f"npx vite --host 127.0.0.1 --port {port} --strictPort"
+    if "@angular/core" in deps:
+        return f"npx ng serve --host 127.0.0.1 --port {port}"
+    if "react-scripts" in deps:
+        return "npm start"
+    if scripts.get("dev"):
+        return f"npm run dev -- --port {port}"
+    if scripts.get("start"):
+        return "npm start"
+    return ""
 
 
 RUNNABLE = ("node-api", "python", "cap-srv", "java")     # never the approuter / HTML5 deployer: they need BTP
@@ -774,7 +850,27 @@ server:
             info.update(port=port, entry=url_entry)
         elif mode == "web-build" and entry_mod:
             out_dir, err = _web_build(entry_mod, tmp, env, say)
-            if err:
+            dev = None
+            if err == "NO_OUTPUT":
+                froot = os.path.join(tmp, *entry_mod["path"].split("/")) if entry_mod["path"] else tmp
+                fpkg = json.load(open(os.path.join(froot, "package.json"), encoding="utf-8"))
+                dport = bv._free_port()
+                dcmd = _dev_server_cmd(froot, fpkg, dport)
+                if not dcmd:
+                    raise RuntimeError("The build finished but wrote no index.html, and the frontend has no dev server "
+                                       "script to start instead. Set the build output folder (e.g. Vite build.outDir).")
+                say(f"The build wrote no page — starting the frontend dev server instead: {dcmd}")
+                dlog = os.path.join(tmp, ".evoke-dev.log")
+                dfh = open(dlog, "w", encoding="utf-8")
+                dproc = subprocess.Popen(dcmd, cwd=froot, shell=True, stdout=dfh, stderr=subprocess.STDOUT,
+                                         stdin=subprocess.DEVNULL, env=dict(env, PORT=str(dport), HOST="127.0.0.1", BROWSER="none"),
+                                         **bv._popen_kwargs())
+                stops.append(lambda: (bv._kill_tree(dproc), dfh.close()))
+                up, _ = bv._wait_http(f"http://127.0.0.1:{dport}/", dproc, 180)
+                if not up:
+                    raise RuntimeError("The frontend dev server did not start:\n" + _tail_err(open(dlog, encoding="utf-8", errors="replace").read()))
+                dev = dport
+            elif err:
                 raise RuntimeError(err)
             api = ""
             run = [c for c in commands_from_brief(brief, "run") if not _is_gateway_cmd(c, mods)] or                 [m["commands"]["run"] for m in mods if m["kind"] in ("node-api", "python") and m["commands"].get("run")]
@@ -803,9 +899,12 @@ server:
                     info["services"] = [{"name": "API", "path": "/api"}]
                 else:
                     say("The API did not start — the web app runs without it (see Log).")
-            port, stop = _static_server(out_dir, api)
-            stops.append(stop)
-            info.update(port=port, entry="/")
+            if dev:                                    # the dev server serves the app (and proxies /api itself)
+                info.update(port=dev, entry="/", kind="dev-server")
+            else:
+                port, stop = _static_server(out_dir, api)
+                stops.append(stop)
+                info.update(port=port, entry="/")
         else:
             run = [c for c in commands_from_brief(brief, "run") if not _is_gateway_cmd(c, mods)] or \
                 [m["commands"]["run"] for m in mods if m["kind"] in RUNNABLE and m["commands"].get("run")]
