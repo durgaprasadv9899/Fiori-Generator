@@ -860,6 +860,16 @@ def _is_gateway_cmd(cmd: str, mods: List[Dict]) -> bool:
     return any(x["kind"] in ("approuter", "html5-deployer") and x["path"] == folder for x in mods)
 
 
+def _service_installs(brief: Dict, mods: List[Dict], entry_mod: Optional[Dict]) -> List[str]:
+    """Install commands for the services a preview starts: the brief's, else each backend module's own."""
+    skip = f"cd {entry_mod['path'].rstrip('/')} " if entry_mod and entry_mod["path"] else None
+    cmds = [c for c in commands_from_brief(brief) if re.search(r"\b(npm (ci|install)|pip install)\b", c)
+            and not (skip and c.startswith(skip))]
+    return cmds or [m["commands"]["install"] for m in mods
+                    if m["kind"] in ("node-api", "python") and m["commands"].get("install")
+                    and not (entry_mod and m["id"] == entry_mod["id"])]
+
+
 def start_preview(files: Dict[str, str], analysis: Dict, brief: Dict, say: Callable[[str], None] = lambda m: None) -> Dict:
     """Start the project in a sandbox; returns {preview_id, port, entry, kind, mock_auth}."""
     _reap()
@@ -1010,11 +1020,11 @@ server:
                 svc_env = env
                 if _uses_python(run, analysis):
                     svc_env = _python_venv(tmp, env)
-                for c in commands_from_brief(brief):
-                    if re.search(r"\b(npm (ci|install)|pip install)\b", c) and \
-                            not c.startswith(f"cd {entry_mod['path'].rstrip('/')} "):
-                        say(f"Running: {c}")
-                        _shell(c, tmp, svc_env, 900)
+                for c in _service_installs(brief, mods, entry_mod):
+                    say(f"Running: {c}")
+                    code, out = _shell(c, tmp, svc_env, 900)
+                    if code != 0:
+                        say("⚠ Install failed: " + _tail_err(out)[-300:])
                 cmd = run[0].replace("$PORT", str(api_port)).replace("${PORT}", str(api_port))
                 log = os.path.join(tmp, ".evoke-api.log")
                 fh = open(log, "w", encoding="utf-8")
@@ -1029,7 +1039,14 @@ server:
                     api = f"http://127.0.0.1:{api_port}"
                     info["services"] = [{"name": "API", "path": "/api"}]
                 else:
-                    say("The API did not start — the web app runs without it (see Log).")
+                    why = _tail_err(info["log_fn"]())[-400:].strip()
+                    info["api_problem"] = f"The backend ({cmd}) did not start, so calls to /api will fail" + \
+                        (f": {why}" if why else ".") + " Fix the start command under 'How is the service started?' in the brief."
+                    say("⚠ " + info["api_problem"])
+            elif any(m["kind"] in ("node-api", "python") for m in mods):
+                info["api_problem"] = "The project has a backend but no start command was found, so calls to /api will fail. " \
+                    "Add it under 'How is the service started?' in the brief."
+                say("⚠ " + info["api_problem"])
             if dev:                                    # the dev server serves the app (and proxies /api itself)
                 info.update(port=dev, entry=_router_basename(os.path.join(tmp, *entry_mod["path"].split("/")) if entry_mod["path"] else tmp)
                             or vbase or "/", kind="dev-server")
@@ -1072,15 +1089,9 @@ server:
                                    "under 'How is the service started?' in the project brief.")
             if _uses_python(run, analysis):
                 env = _python_venv(tmp, env)
-                for c in commands_from_brief(brief):
-                    if re.search(r"pip install", c):
-                        say(f"Running: {c}")
-                        _shell(c, tmp, env, 600)
-            else:
-                for c in commands_from_brief(brief):
-                    if re.search(r"\bnpm (ci|install)\b", c):
-                        say(f"Running: {c}")
-                        _shell(c, tmp, env, 900)
+            for c in _service_installs(brief, mods, None):
+                say(f"Running: {c}")
+                _shell(c, tmp, env, 900)
             port = bv._free_port()
             cmd = run[0].replace("$PORT", str(port)).replace("${PORT}", str(port))
             log = os.path.join(tmp, ".evoke-run.log")
@@ -1104,7 +1115,8 @@ server:
         _rmtree(tmp)
         raise
     say("Checking that the page and its scripts load…")
-    info["warnings"] = _self_check(info["port"], info["entry"], tuple(info["mock_auth"]) if info.get("mock_auth") else None)
+    info["warnings"] = ([info["api_problem"]] if info.get("api_problem") else []) + \
+        _self_check(info["port"], info["entry"], tuple(info["mock_auth"]) if info.get("mock_auth") else None)
     for w in info["warnings"][:5]:
         say("⚠ " + w)
     with _PLOCK:

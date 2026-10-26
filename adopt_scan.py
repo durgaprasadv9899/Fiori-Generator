@@ -416,20 +416,61 @@ def _py_commands(files: Dict[str, str], root: str, framework: str) -> Dict:
     has_tests = any(re.match(re.escape(root) + r"(tests?/|.*test_\w+\.py$)", p) for p in files)
     if has_tests:
         c["test"] = _cmd_prefix(root) + "python -m pytest -q"
-    entry = next((p[len(root):] for p in (root + "main.py", root + "app.py", root + "app/main.py", root + "manage.py",
-                                         root + "streamlit_app.py") if p in files), "")
+    declared = _declared_py_start(files, root)
+    if declared:
+        c["run"] = _cmd_prefix(root) + declared
+        return c
+    entry, var = "", "app"
+    for p in (root + "main.py", root + "app.py", root + "app/main.py", root + "manage.py", root + "streamlit_app.py"):
+        if p in files:
+            entry = p[len(root):]
+            m = _PY_APP_RX.search(files[p] or "")
+            var = m.group(1) if m else var
+            break
+    if not entry and framework in ("FastAPI", "Flask"):
+        # the file that creates the app object, the shallowest first (e.g. api/server.py: `api = FastAPI()`)
+        for p, t in sorted(_text(files, root, (".py",)), key=lambda x: (x[0].count("/"), x[0])):
+            m = _PY_APP_RX.search(t)
+            if m and "/tests/" not in "/" + p and not p.rsplit("/", 1)[-1].startswith("test_"):
+                entry, var = p[len(root):], m.group(1)
+                break
     if framework == "FastAPI" and entry:
         mod = entry[:-3].replace("/", ".")
-        c["run"] = _cmd_prefix(root) + f"python -m uvicorn {mod}:app --port $PORT"
+        c["run"] = _cmd_prefix(root) + f"python -m uvicorn {mod}:{var} --port $PORT"
     elif framework == "Django":
         c["run"] = _cmd_prefix(root) + "python manage.py runserver 127.0.0.1:$PORT"
     elif framework == "Streamlit" and entry:
         c["run"] = _cmd_prefix(root) + f"python -m streamlit run {entry} --server.port $PORT --server.headless true"
     elif framework == "Flask" and entry:
-        c["run"] = _cmd_prefix(root) + f"python -m flask --app {entry[:-3]} run --port $PORT"
+        c["run"] = _cmd_prefix(root) + f"python -m flask --app {entry[:-3].replace('/', '.')}:{var} run --port $PORT"
     elif entry:
         c["run"] = _cmd_prefix(root) + f"python {entry}"
     return c
+
+
+_PY_APP_RX = re.compile(r"^(\w+)\s*(?::\s*\w+\s*)?=\s*(?:fastapi\.|flask\.)?(?:FastAPI|Flask)\(", re.M)
+
+
+def _declared_py_start(files: Dict[str, str], root: str) -> str:
+    """The start command the project declares for Cloud Foundry / Heroku (Procfile `web:`, manifest.yml `command:`),
+    rewritten to listen on $PORT locally."""
+    cmd = ""
+    m = re.search(r"^web:\s*(.+)$", files.get(root + "Procfile") or "", re.M)
+    if m:
+        cmd = m.group(1).strip()
+    else:
+        for mf in (root + "manifest.yml", root + "manifest.yaml", "manifest.yml", "manifest.yaml"):
+            m = re.search(r"^\s*command:\s*['\"]?(.+?)['\"]?\s*$", files.get(mf) or "", re.M)
+            if m and re.search(r"\b(python|uvicorn|gunicorn|flask|hypercorn)\b", m.group(1)):
+                cmd = m.group(1).strip()
+                break
+    if not cmd or not re.search(r"\b(python|uvicorn|gunicorn|flask|hypercorn|waitress-serve)\b", cmd):
+        return ""
+    if re.match(r"(uvicorn|gunicorn|flask|hypercorn)\b", cmd):
+        cmd = "python -m " + cmd                          # run through the venv's interpreter
+    cmd = re.sub(r"(--host[ =]|-b |--bind[ =])\s*\S+", lambda x: x.group(1) + ("127.0.0.1:$PORT" if "bind" in x.group(1) or
+                                                                                 x.group(1) == "-b " else "127.0.0.1"), cmd)
+    return cmd
 
 
 def _python_framework(files: Dict[str, str], root: str) -> str:
