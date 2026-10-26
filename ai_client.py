@@ -262,6 +262,8 @@ def make_converse_fn(model: str, temperature: float = 0.2, max_tokens: int = 160
         if tools:
             body["tools"] = [{"name": t["name"], "description": t.get("description", ""),
                               "input_schema": t["inputSchema"]["json"]} for t in tools]
+            if tool_choice:
+                body["tool_choice"] = tool_choice
         attempt, bad_json = 0, 0
         while True:
             try:

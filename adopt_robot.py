@@ -34,8 +34,9 @@ from typing import Callable, Dict, List, Optional, Tuple
 import adopt_files
 import adopt_scan
 
-MAX_STEPS_PLAN = 18
-MAX_STEPS_RUN = 70
+MAX_STEPS_PLAN = 25
+MAX_STEPS_RUN = 120
+WRAP_UP = 8                      # steps before the limit at which the AI is told to wrap up
 MAX_REPAIR = 2
 READ_LINES = 400
 NEVER_EDIT = ("package-lock.json", "yarn.lock", "pnpm-lock.yaml", "poetry.lock")
@@ -562,7 +563,7 @@ def _salvage(use: Dict, ws: Workspace, step) -> Optional[str]:
             f"saved line:\n{last}\nSend at most ~250 lines per call.")
 
 
-def _converse_with_heartbeat(converse, system, messages, tools, say, every: float = 30.0):
+def _converse_with_heartbeat(converse, system, messages, tools, say, every: float = 30.0, tool_choice=None):
     """One model call; while it runs (long answers take minutes) report that the robot is still working."""
     box: Dict = {"chars": 0}
 
@@ -572,7 +573,8 @@ def _converse_with_heartbeat(converse, system, messages, tools, say, every: floa
     def call():
         try:
             try:
-                box["r"] = converse(system, messages, tools, on_progress=progress)
+                kw = {"tool_choice": tool_choice} if tool_choice else {}
+                box["r"] = converse(system, messages, tools, on_progress=progress, **kw)
             except TypeError:                              # a converse without progress reporting
                 box["r"] = converse(system, messages, tools)
         except Exception as e:  # noqa: BLE001
@@ -646,10 +648,36 @@ def _loop(converse, system: str, messages: List[Dict], tools: List[Dict], ws: Wo
                 text, ok = f"Tool error: {e}", False
             results.append({"toolResult": {"toolUseId": u["toolUseId"], "status": "success" if ok else "error",
                                            "content": [{"text": text[:60_000]}]}})
+        if max_steps - n - 1 == WRAP_UP:
+            results.append({"text": f"Only {WRAP_UP} steps are left. Complete the most important remaining work now "
+                                    f"(no more exploring) and call {stop_tool}."})
         messages.append({"role": "user", "content": results})
         if final is not None:
             return final
-    raise RuntimeError(f"The AI assistant did not finish within {max_steps} steps.")
+    return _out_of_steps(converse, system, messages, tools, ws, stop_tool, max_steps, step, say)
+
+
+def _out_of_steps(converse, system, messages, tools, ws, stop_tool, max_steps, step, say) -> Dict:
+    """The step budget is used up: make the model report what it did (it must call `stop_tool`), and never throw
+    away the files already changed."""
+    step("info", f"Reached the limit of {max_steps} steps — asking the AI to wrap up with what is done", False)
+    messages[-1]["content"].append({"text": f"The step limit is reached. Call {stop_tool} NOW: report what is done "
+                                            "and list anything that is still missing."})
+    try:
+        r = _converse_with_heartbeat(converse, system, messages, tools, say,
+                                     tool_choice={"type": "tool", "name": stop_tool})
+        use = next((c["toolUse"] for c in r["output"]["message"]["content"]
+                    if "toolUse" in c and c["toolUse"]["name"] == stop_tool), None)
+        if use is not None:
+            return dict(use["input"] or {}, _limit=True)
+    except Exception as e:  # noqa: BLE001
+        say(f"Wrap-up call failed: {e}")
+    if stop_tool == "finish" and ws.changes:
+        return {"summary": f"Stopped after {max_steps} steps before the AI reported back; the changes made so far "
+                           "are kept. Review them, then use Revise (e.g. \"continue\") to complete the rest.",
+                "criteria_results": [], "_limit": True}
+    raise RuntimeError(f"The AI assistant did not finish within {max_steps} steps. Split the request into smaller "
+                       "requests (e.g. one screen at a time).")
 
 
 def _stepper(m: Dict, say: Callable[[str], None]):
@@ -757,6 +785,9 @@ def _rounds(m: Dict, ws: Workspace, msgs: List[Dict], converse, checks_fn, say, 
     final = _loop(converse, _SYS_RUN, msgs, RUN_TOOLS, ws, "finish", MAX_STEPS_RUN, step, say)
     m["summary"] = final.get("summary", "")
     m["criteria_results"] = final.get("criteria_results") or []
+    if final.get("_limit"):
+        m["summary"] = ("⚠ The AI reached its step limit, so this change may be incomplete — check the criteria "
+                        "below and use Revise (e.g. \"continue with the remaining items\") to finish it.\n\n" + m["summary"])
     m["_files"] = ws.changes
     save(m)
     baseline: Optional[set] = None
@@ -784,7 +815,7 @@ def _rounds(m: Dict, ws: Workspace, msgs: List[Dict], converse, checks_fn, say, 
         msgs.append({"role": "user", "content": [{"text": "The full checks FAILED after your change:\n\n" + detail +
                                                   "\n\nFind the cause (it may be pre-existing — then say so and leave it), "
                                                   "fix what your change broke, and call finish again."}]})
-        final = _loop(converse, _SYS_RUN, msgs, RUN_TOOLS, ws, "finish", 30, step, say)
+        final = _loop(converse, _SYS_RUN, msgs, RUN_TOOLS, ws, "finish", 40, step, say)
         m["summary"] = final.get("summary", m["summary"])
         m["criteria_results"] = final.get("criteria_results") or m["criteria_results"]
     m["_files"] = ws.changes
