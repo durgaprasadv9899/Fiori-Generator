@@ -404,6 +404,15 @@ def _node_commands(files: Dict[str, str], root: str, pkg: Dict) -> Dict:
         if scripts.get(k):
             c["run"] = _cmd_prefix(root) + ("npm start" if k == "start" else f"npm run {k}")
             break
+    else:                                   # no start script: the package's main file, or the file that listens
+        cands = [pkg["main"]] if isinstance(pkg.get("main"), str) else []
+        cands += ["server.js", "index.js", "app.js", "src/server.js", "src/index.js", "src/app.js",
+                  "server.ts", "index.ts", "app.ts", "src/server.ts", "src/index.ts", "src/app.ts"]
+        for f in cands:
+            f = f.lstrip("./")
+            if re.search(r"\.listen\s*\(|createServer\s*\(|serve\s*\(", files.get(root + f) or ""):
+                c["run"] = _cmd_prefix(root) + ("npx --yes tsx " if f.endswith(".ts") else "node ") + f
+                break
     return c
 
 
@@ -427,13 +436,21 @@ def _py_commands(files: Dict[str, str], root: str, framework: str) -> Dict:
             m = _PY_APP_RX.search(files[p] or "")
             var = m.group(1) if m else var
             break
-    if not entry and framework in ("FastAPI", "Flask"):
+    srcs = [(p, t) for p, t in sorted(_text(files, root, (".py",)), key=lambda x: (x[0].count("/"), x[0]))
+            if "/tests/" not in "/" + p and not p.rsplit("/", 1)[-1].startswith("test_")]
+    if not entry:
         # the file that creates the app object, the shallowest first (e.g. api/server.py: `api = FastAPI()`)
-        for p, t in sorted(_text(files, root, (".py",)), key=lambda x: (x[0].count("/"), x[0])):
+        for p, t in srcs:
             m = _PY_APP_RX.search(t)
-            if m and "/tests/" not in "/" + p and not p.rsplit("/", 1)[-1].startswith("test_"):
+            if m and ("node_modules/" not in p) and not p.startswith(root + ".venv/"):
                 entry, var = p[len(root):], m.group(1)
+                if framework not in ("FastAPI", "Flask"):
+                    framework = "FastAPI" if "FastAPI(" in m.group(0) or "fastapi" in t else "Flask"
                 break
+    if not entry:                           # a script that starts its own server
+        for p, t in srcs:
+            if re.search(r"__name__\s*==\s*['\"]__main__['\"]", t) and re.search(r"\b(uvicorn\.run|\.run\(|serve\()", t):
+                return dict(c, run=_cmd_prefix(root) + f"python {p[len(root):]}")
     if framework == "FastAPI" and entry:
         mod = entry[:-3].replace("/", ".")
         c["run"] = _cmd_prefix(root) + f"python -m uvicorn {mod}:{var} --port $PORT"
@@ -448,7 +465,7 @@ def _py_commands(files: Dict[str, str], root: str, framework: str) -> Dict:
     return c
 
 
-_PY_APP_RX = re.compile(r"^(\w+)\s*(?::\s*\w+\s*)?=\s*(?:fastapi\.|flask\.)?(?:FastAPI|Flask)\(", re.M)
+_PY_APP_RX = re.compile(r"^(\w+)\s*(?::\s*\w+\s*)?=\s*(?:fastapi\.|flask\.)?(?:FastAPI|Flask|create_app)\(", re.M)
 
 
 def _declared_py_start(files: Dict[str, str], root: str) -> str:

@@ -860,6 +860,25 @@ def _is_gateway_cmd(cmd: str, mods: List[Dict]) -> bool:
     return any(x["kind"] in ("approuter", "html5-deployer") and x["path"] == folder for x in mods)
 
 
+def _fill_commands(files: Dict[str, str], mods: List[Dict]) -> List[Dict]:
+    """The stored analysis with missing install / run commands taken from a fresh scan of the files
+    (projects adopted before the scanner learned a start command still preview their backend)."""
+    try:
+        import adopt_scan
+        fresh = {m["id"]: m for m in adopt_scan.detect_modules(files)[0]}
+    except Exception:  # noqa: BLE001
+        return mods
+    out = []
+    for m in mods:
+        f = fresh.get(m["id"])
+        if f and m["kind"] in ("node-api", "python"):
+            m = dict(m, commands={**(f.get("commands") or {}), **{k: v for k, v in (m.get("commands") or {}).items() if v}})
+        out.append(m)
+    ids = {m["id"] for m in out}
+    out += [f for f in fresh.values() if f["id"] not in ids and f["kind"] in ("node-api", "python") and f["commands"].get("run")]
+    return out
+
+
 def _service_installs(brief: Dict, mods: List[Dict], entry_mod: Optional[Dict]) -> List[str]:
     """Install commands for the services a preview starts: the brief's, else each backend module's own."""
     skip = f"cd {entry_mod['path'].rstrip('/')} " if entry_mod and entry_mod["path"] else None
@@ -873,7 +892,7 @@ def _service_installs(brief: Dict, mods: List[Dict], entry_mod: Optional[Dict]) 
 def start_preview(files: Dict[str, str], analysis: Dict, brief: Dict, say: Callable[[str], None] = lambda m: None) -> Dict:
     """Start the project in a sandbox; returns {preview_id, port, entry, kind, mock_auth}."""
     _reap()
-    mods = analysis.get("modules") or []
+    mods = _fill_commands(files, analysis.get("modules") or [])
     mode = (brief or {}).get("preview_data") or ""
     entry_mod = next((m for m in mods if m["id"] == (brief or {}).get("entry")), None) or \
         next((m for m in mods if m["role"] == "ui"), None)
@@ -1046,7 +1065,6 @@ server:
             elif any(m["kind"] in ("node-api", "python") for m in mods):
                 info["api_problem"] = "The project has a backend but no start command was found, so calls to /api will fail. " \
                     "Add it under 'How is the service started?' in the brief."
-                say("⚠ " + info["api_problem"])
             if dev:                                    # the dev server serves the app (and proxies /api itself)
                 info.update(port=dev, entry=_router_basename(os.path.join(tmp, *entry_mod["path"].split("/")) if entry_mod["path"] else tmp)
                             or vbase or "/", kind="dev-server")
