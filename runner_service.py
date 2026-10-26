@@ -22,6 +22,7 @@ import hashlib
 import hmac
 import json
 import os
+import re
 import time
 import uuid
 from typing import Dict, Optional
@@ -223,6 +224,9 @@ async def proxy(path: str, request: Request):
         return PlainTextResponse("No preview is open in this browser. Start one in the studio (Try it).", status_code=404)
     headers = {k: v for k, v in request.headers.items() if k.lower() not in _HOP}
     headers["accept-encoding"] = "identity"
+    app_cookies = "; ".join(f"{k}={v}" for k, v in request.cookies.items() if k != COOKIE)
+    if app_cookies:                       # the app's own cookies (e.g. its login session) — never the preview cookie
+        headers["cookie"] = app_cookies
     body = await request.body()
     url = f"http://127.0.0.1:{p['port']}/{path}" + (("?" + request.url.query) if request.url.query else "")
     try:
@@ -230,12 +234,20 @@ async def proxy(path: str, request: Request):
                              timeout=180, auth=tuple(p["mock_auth"]) if p.get("mock_auth") else None)
     except requests.RequestException as e:
         return PlainTextResponse(f"The preview did not answer: {e}", status_code=502)
-    out = Response(r.content, status_code=r.status_code)
+    content = r.content
+    ctype = r.headers.get("content-type", "")
+    if re.search(r"text/|json|javascript|xml", ctype) and _LOCAL_ORIGIN.search(content.decode("utf-8", "replace")[:2_000_000]):
+        # the app builds absolute links from the address it sees (127.0.0.1:<port>) — point them at this preview
+        content = _LOCAL_ORIGIN.sub("", content.decode("utf-8", "replace")).encode("utf-8")
+    out = Response(content, status_code=r.status_code)
     for k, v in r.raw.headers.items():
         lk = k.lower()
         if lk in _DROP_RESP:
             continue
         if lk == "location":
-            v = v.replace(f"http://127.0.0.1:{p['port']}", "").replace(f"http://localhost:{p['port']}", "") or "/"
+            v = _LOCAL_ORIGIN.sub("", v) or "/"
         out.headers.append(k, v)
     return out
+
+
+_LOCAL_ORIGIN = re.compile(r"https?://(?:127\.0\.0\.1|localhost|0\.0\.0\.0)(?::\d+)?(?=[/\"'?#\s]|$)")

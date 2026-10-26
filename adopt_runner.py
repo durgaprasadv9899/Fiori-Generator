@@ -24,7 +24,7 @@ import threading
 import time
 import uuid
 import xml.etree.ElementTree as ET
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import adopt_files
 import build_validation as bv
@@ -583,31 +583,48 @@ class _StaticHandler(http.server.SimpleHTTPRequestHandler):
         if self.proxy_to and (path == "/api" or path.startswith(("/api/", "/api?"))):
             return self._proxy()
         local = self._local(path)
+        if local is not None and self.proxy_to and os.path.isdir(self.translate_path(local)):
+            local = None                            # a folder (e.g. /) is a page: the backend answers it first
         if local is not None:
             self.path = local + (("?" + path.split("?", 1)[1]) if "?" in path else "")
             return False
         is_page = "." not in os.path.basename(path.split("?")[0]) and "text/html" in (self.headers.get("Accept") or "text/html")
-        if self.proxy_to and not is_page:
-            return self._proxy()                    # e.g. files the backend serves itself
+        if self.proxy_to:
+            # the backend first (its own pages such as /login, redirects, files it serves); a page it does not
+            # know is a single-page-app route
+            if not is_page:
+                return self._proxy()
+            got = self._fetch()
+            if got[0] != 404:
+                return self._send(*got)
         if is_page:
             self.path = "/index.html"               # single-page app navigation
         return False
 
-    def _proxy(self) -> bool:
+    def _fetch(self) -> Tuple[int, Any, bytes]:
         import urllib.error
         import urllib.request
+
+        class _Keep(urllib.request.HTTPRedirectHandler):   # redirects go back to the browser (login flows)
+            def redirect_request(self, *a, **kw):
+                return None
         n = int(self.headers.get("Content-Length") or 0)
         body = self.rfile.read(n) if n else None
         req = urllib.request.Request(self.proxy_to + self.path, data=body, method=self.command,
                                      headers={k: v for k, v in self.headers.items()
                                               if k.lower() not in ("host", "connection", "content-length")})
         try:
-            r = urllib.request.urlopen(req, timeout=120)
-            status, headers, data = r.status, r.headers, r.read()
+            r = urllib.request.build_opener(_Keep).open(req, timeout=120)
+            return r.status, r.headers, r.read()
         except urllib.error.HTTPError as e:
-            status, headers, data = e.code, e.headers, e.read()
+            return e.code, e.headers, e.read()
         except Exception as e:  # noqa: BLE001
-            status, headers, data = 502, {}, f"API not reachable: {e}".encode()
+            return 502, {}, f"API not reachable: {e}".encode()
+
+    def _proxy(self) -> bool:
+        return self._send(*self._fetch())
+
+    def _send(self, status: int, headers, data: bytes) -> bool:
         self.send_response(status)
         for k, v in (headers.items() if headers else []):
             if k.lower() not in ("transfer-encoding", "connection", "content-length"):
@@ -724,7 +741,7 @@ def _self_check(port: int, entry: str, auth=None) -> List[str]:
     if r.status_code >= 400:
         return [f"The entry page {entry} returned HTTP {r.status_code}."]
     problems = []
-    if "<script" not in r.text.lower() and len(r.text.strip()) < 200:
+    if "<script" not in r.text.lower() and "<form" not in r.text.lower() and len(r.text.strip()) < 200:
         problems.append(f"The entry page {entry} has no content ({len(r.text)} bytes).")
     for u in _page_assets(r.text)[:30]:
         url = urljoin(base + entry, u)
@@ -858,6 +875,16 @@ def _is_gateway_cmd(cmd: str, mods: List[Dict]) -> bool:
     m = re.match(r"\s*cd\s+([^&]+?)\s*&&", cmd)
     folder = (m.group(1).strip().strip("/\\") + "/") if m else ""
     return any(x["kind"] in ("approuter", "html5-deployer") and x["path"] == folder for x in mods)
+
+
+def _backend_front_door(api: str) -> bool:
+    """True when the backend answers / itself with a page or a redirect (a login page, the app's start page)."""
+    import requests
+    try:
+        r = requests.get(api + "/", timeout=20, allow_redirects=False, headers={"Accept": "text/html"})
+    except Exception:  # noqa: BLE001
+        return False
+    return 300 <= r.status_code < 400 or (r.status_code == 200 and "html" in r.headers.get("content-type", ""))
 
 
 def _fill_commands(files: Dict[str, str], mods: List[Dict]) -> List[Dict]:
@@ -1074,7 +1101,10 @@ server:
                 aliases = _base_aliases(out_dir)
                 froot = os.path.join(tmp, *entry_mod["path"].split("/")) if entry_mod["path"] else tmp
                 router_base = _router_basename(froot, out_dir)   # where the app's router expects to run
-                info.update(port=port, entry=router_base or (aliases[-1] if aliases else "/"))
+                entry = router_base or (aliases[-1] if aliases else "/")
+                if api and _backend_front_door(api):
+                    entry = "/"                         # the backend's own start (e.g. its login page), as deployed
+                info.update(port=port, entry=entry)
         else:
             run = [c for c in commands_from_brief(brief, "run") if not _is_gateway_cmd(c, mods)] or \
                 [m["commands"]["run"] for m in mods if m["kind"] in RUNNABLE and m["commands"].get("run")]
