@@ -79,6 +79,13 @@ export function versionSource(info: AdoptProjectInfo, vid?: string, versions: Ve
   return { kind: "version", id, label: `Version ${n}` };
 }
 
+/** The saved version just before `vid`, if any. */
+export function previousVersion(versions: VersionMeta[], vid: string): VersionMeta | undefined {
+  const cur = versions.find((v) => v.id === vid);
+  if (!cur) return undefined;
+  return versions.filter((v) => v.number < cur.number).sort((a, b) => b.number - a.number)[0];
+}
+
 export function bodyOf(src: PreviewSource): PreviewBody {
   return src.kind === "mission" ? { mission_id: src.id } : { version_id: src.id };
 }
@@ -134,6 +141,8 @@ export function CompareView({ base, main, versions, device, onClose }: {
 }) {
   const bsrc = base.preview?.source;
   const bn = bsrc ? (bsrc.number ?? versions.find((v) => v.id === bsrc.id)?.number) : undefined;
+  const msrc = main.preview?.source;
+  const mn = msrc?.kind === "version" ? (msrc.number ?? versions.find((v) => v.id === msrc.id)?.number) : undefined;
   const side = (label: string, tone: "neutral" | "brand", s: PreviewSlot) => (
     <div className="ev-cmp__side">
       <div className="ev-cmp__label"><StatusBadge tone={tone}>{label}</StatusBadge>
@@ -148,13 +157,13 @@ export function CompareView({ base, main, versions, device, onClose }: {
     <div className="ev-cmp">
       <div className="ev-cmp__head">
         <Icon name="compare" /><b>Before and after</b>
-        <span className="ev-muted ev-small">Same pages, the original version next to the AI change.</span>
+        <span className="ev-muted ev-small">Same pages, side by side — the left one as it was, the right one with the change.</span>
         <span className="ev-spacer" />
         <Button design="Transparent" icon="decline" onClick={onClose}>Close comparison</Button>
       </div>
       <div className="ev-cmp__grid">
         {side(bn ? `Before · version ${bn}` : "Before · original version", "neutral", base)}
-        {side("After · AI change", "brand", main)}
+        {side(msrc?.kind === "version" ? `After · version ${mn ?? "?"}` : "After · AI change", "brand", main)}
       </div>
     </div>
   );

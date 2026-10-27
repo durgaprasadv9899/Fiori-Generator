@@ -678,6 +678,53 @@ def _base_aliases(out_dir: str) -> Tuple[str, ...]:
     return tuple(sorted(set(aliases), key=len, reverse=True))
 
 
+_HASHED_ASSET = re.compile(r"[.-][A-Za-z0-9_-]{8,}\.(?:js|mjs|css|map)$")
+
+
+def _served_copies(out_dir: str, tmp: str, extra: Tuple[str, ...] = ()) -> List[str]:
+    """Folders outside the build output that hold the copy of the UI the backend serves — e.g. a Vite build with
+    base '/static/dist/' whose bundle is copied into the backend's static/dist. Absolute paths."""
+    out_abs = os.path.abspath(out_dir)
+    prefixes = [a.strip("/") for a in _base_aliases(out_dir)]
+    found = set()
+    for p in prefixes + [e.strip("/") for e in extra if e and e.strip("/")]:
+        d = os.path.abspath(os.path.join(tmp, *p.split("/")))
+        # a nested path whose parent exists (static/ of the backend); a one-segment base like /create-order/ is a
+        # route, not a folder, unless a build already lives there
+        if os.path.isfile(os.path.join(d, "index.html")) or ("/" in p and os.path.isdir(os.path.dirname(d))):
+            found.add(d)
+    if prefixes:                     # an older build of the same app: its index.html loads assets from the same base
+        for d in _index_dirs(tmp):
+            ad = os.path.abspath(d)
+            if ad == out_abs or ad.startswith(out_abs + os.sep):
+                continue
+            try:
+                html = open(os.path.join(d, "index.html"), encoding="utf-8", errors="replace").read()
+            except OSError:
+                continue
+            if any(u.lstrip("/").startswith(p + "/") for u in _page_assets(html) for p in prefixes):
+                found.add(ad)
+    return sorted(d for d in found if d != out_abs and not out_abs.startswith(d + os.sep)
+                  and not d.startswith(out_abs + os.sep) and d.startswith(os.path.abspath(tmp) + os.sep))
+
+
+def _sync_served_copies(out_dir: str, tmp: str, say: Callable[[str], None], extra: Tuple[str, ...] = ()) -> List[str]:
+    """Replace the copies of the UI the backend serves with the fresh build, so the backend's pages show the
+    change. Returns the updated folders relative to the sandbox."""
+    done = []
+    for d in _served_copies(out_dir, tmp, extra):
+        if os.path.isdir(d):
+            for r, _, names in os.walk(d):
+                for f in names:
+                    if (f == "index.html" and os.path.abspath(r) == d) or _HASHED_ASSET.search(f):
+                        os.remove(os.path.join(r, f))          # the old build: stale page and hashed assets
+        shutil.copytree(out_dir, d, dirs_exist_ok=True)
+        rel = os.path.relpath(d, tmp).replace(os.sep, "/")
+        done.append(rel)
+        say(f"Updated {rel}/ — the copy of the UI the backend serves — with the new build")
+    return done
+
+
 _BASENAME_RX = re.compile(r"""basename\s*(?:=\s*\{?\s*|:\s*)["'`](/[^"'`$]*)["'`]""")
 
 
@@ -867,16 +914,23 @@ def rebuild_outputs(files: Dict[str, str], outputs: List[Dict], say: Callable[[s
             if not os.path.isdir(target):
                 errors.append(f"{b['module']}: the build did not write {b['out_dir']}/")
                 continue
-            built, _ = adopt_files.from_dir(target)
-            built = {p: c for p, c in built.items()                   # only what this build wrote
-                     if os.path.getmtime(os.path.join(target, *p.split("/"))) >= t0}
-            if not built:
-                errors.append(f"{b['module']}: the build wrote nothing new into {b['out_dir']}/")
-                continue
-            for p, c in built.items():
-                out[b["out_dir"] + "/" + p] = c
-            done.append(b["out_dir"])
-            say(f"Rebuilt {b['out_dir']}/ ({len(built)} files)")
+            dirs = [b["out_dir"]] if b.get("out_committed", True) else []
+            # the copy the backend serves (e.g. static/dist) gets the new build too
+            dirs += [d for d in _sync_served_copies(target, tmp, say, tuple(b.get("copies") or [])) if d not in dirs]
+            wrote = 0
+            for d in dirs:
+                ddir = os.path.join(tmp, *d.split("/"))
+                built, _ = adopt_files.from_dir(ddir)
+                built = {p: c for p, c in built.items()               # only what this build wrote
+                         if os.path.getmtime(os.path.join(ddir, *p.split("/"))) >= t0}
+                for p, c in built.items():
+                    out[d + "/" + p] = c
+                if built:
+                    done.append(d)
+                    wrote += len(built)
+                    say(f"Rebuilt {d}/ ({len(built)} files)")
+            if not wrote:
+                errors.append(f"{b['module']}: the build wrote nothing new into {', '.join(d + '/' for d in dirs) or b['out_dir'] + '/'}")
     finally:
         _rmtree(tmp)
     return {"files": out, "out_dirs": done, "errors": errors}
@@ -1093,6 +1147,8 @@ server:
                         break
             elif err:
                 raise RuntimeError(err)
+            if not dev:                   # the backend may serve its own copy of the bundle (e.g. static/dist)
+                _sync_served_copies(out_dir, tmp, say)
             api = ""
             run = [c for c in commands_from_brief(brief, "run") if not _is_gateway_cmd(c, mods)] or                 [m["commands"]["run"] for m in mods if m["kind"] in ("node-api", "python") and m["commands"].get("run")]
             if run:                                   # full stack: the API behind /api

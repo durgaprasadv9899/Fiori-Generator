@@ -1228,6 +1228,36 @@ def ui_map(files: Dict[str, str], mods: List[Dict]) -> List[Dict]:
     return uniq[:150]
 
 
+_VITE_BASE_RX = re.compile(r"\bbase\s*:\s*['\"`](/[^'\"`]+)['\"`]")
+_HTML_ASSET_RX = re.compile(r"""<(?:script|link)\b[^>]*?\b(?:src|href)\s*=\s*["'](/[^"'#?]+)""", re.I)
+
+
+def _served_copies(files: Dict[str, str], root: str, pkg: Dict, out_dir: str) -> List[str]:
+    """Folders outside the web module that hold the copy of its bundle a backend serves — the build writes to its
+    own dist/ and a separate step copies it (e.g. into static/dist). Found from the configured base path."""
+    bases = []
+    for name in ("vite.config.ts", "vite.config.js", "vite.config.mjs", "vite.config.mts"):
+        bases += _VITE_BASE_RX.findall(files.get(root + name) or "")
+    if pkg.get("homepage", "").startswith("/"):
+        bases.append(pkg["homepage"])
+    out = []
+    for b in bases:
+        b = b.strip("/")
+        if not b or b == out_dir or (root and (b + "/").startswith(root)):
+            continue
+        has_copy = (b + "/index.html") in files
+        parent = b.rpartition("/")[0]
+        if has_copy or (parent and any(p.startswith(parent + "/") and not p.startswith(root or "\0") for p in files)):
+            out.append(b)
+    for p, text in files.items():                    # an older build whose page loads assets from the same base
+        if p.endswith("/index.html") and "node_modules/" not in p and not (root and p.startswith(root)):
+            d = p[: -len("/index.html")]
+            if d not in out and d != out_dir and any(u.lstrip("/").startswith(b.strip("/") + "/")
+                                                     for u in _HTML_ASSET_RX.findall(text or "") for b in bases if b.strip("/")):
+                out.append(d)
+    return out
+
+
 def build_outputs(files: Dict[str, str], mods: List[Dict]) -> List[Dict]:
     """Where each web module's build goes, and whether that built bundle is committed to the repository."""
     out = []
@@ -1257,8 +1287,10 @@ def build_outputs(files: Dict[str, str], mods: List[Dict]) -> List[Dict]:
         # of what gets deployed (a Python / Java buildpack does not build JavaScript), so it is kept and rebuilt like
         # a committed one — the intake may have left the stale copy out
         served = bool(d) and bool(root) and not (d + "/").startswith(root)
-        out.append({"module": m["name"], "module_path": root, "out_dir": d, "committed": n > 0 or served,
-                    "served_by_backend": served, "files": n})
+        copies = [c for c in _served_copies(files, root, pkg, d) if c != d]
+        out.append({"module": m["name"], "module_path": root, "out_dir": d, "committed": n > 0 or served or bool(copies),
+                    "out_committed": n > 0 or served, "served_by_backend": served or bool(copies), "copies": copies,
+                    "files": n})
     return out
 
 

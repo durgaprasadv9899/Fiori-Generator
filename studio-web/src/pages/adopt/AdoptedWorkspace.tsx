@@ -16,7 +16,7 @@ import {
 } from "./parts";
 import { AppDetails, detailCounts, type DetailKey } from "./details";
 import {
-  CompareView, DeviceSwitch, SourceStrip, StartingPanel, Warnings, bodyOf, describeSource, usePreviewSlot, versionSource, type PreviewSlot,
+  CompareView, DeviceSwitch, SourceStrip, StartingPanel, Warnings, bodyOf, describeSource, previousVersion, usePreviewSlot, versionSource, type PreviewSlot,
 } from "./preview";
 import { useTrackedJob } from "./useTrackedJob";
 import "./adopt.css";
@@ -62,6 +62,14 @@ export function AdoptedWorkspace({ pid, tab, setTab, versions, mayEdit, mayDeplo
       main.start({ mission_id: missionId }, { kind: "mission", id: missionId, label: request });
     if (info) base.start({ version_id: vid }, versionSource(info, vid, versions));
   };
+  /** Before / after for a saved version (e.g. an applied AI change): the version before it next to it. */
+  const compareVersion = (src: PreviewSource) => {
+    const prev = previousVersion(versions, src.id);
+    if (!info || !prev) return;
+    setTab("tryit");
+    if (!(main.preview?.source?.kind === "version" && main.preview.source.id === src.id) && !main.running) main.start(bodyOf(src), src);
+    base.start({ version_id: prev.id }, versionSource(info, prev.id, versions));
+  };
   const openPage = (url: string, show: boolean) => {
     if (!main.preview && !main.running && info) startPreview(versionSource(info, info.version.id, versions), false);
     main.setPath(url);
@@ -99,7 +107,7 @@ export function AdoptedWorkspace({ pid, tab, setTab, versions, mayEdit, mayDeplo
       {tab === "tryit" && <TryIt info={info} versions={versions} main={main} base={base}
         onStart={() => startPreview(main.preview?.source || versionSource(info, info.version.id, versions), false)}
         onLatest={latest}
-        onCompare={(src) => compare(src.id, src.label)} />}
+        onCompare={(src) => src.kind === "mission" ? compare(src.id, src.label) : compareVersion(src)} />}
       {(tab === "model" || tab === "screens") && (
         <Card title="Application details" icon="detail-view" subtitle="Everything the analysis found. Open a page to see it running in Try it.">
           <AppDetails info={info} section={detail} setSection={setDetail} mayEdit={mayEdit} onAsk={ask} onOpenPage={(u) => openPage(u, true)} />
@@ -610,13 +618,15 @@ function TryIt({ info, versions, main, base, onStart, onLatest, onCompare }: {
     </Card>
   );
   const isMission = preview?.source?.kind === "mission";
+  const prev = preview?.source?.kind === "version" ? previousVersion(versions, preview.source.id) : undefined;
   return (
     <Card title="Try the app" icon="play" subtitle={preview ? `${preview.kind}${main.path || preview.entry ? ` · ${main.path || preview.entry}` : ""}` : "Starting…"}>
       {preview && !main.running && <SourceStrip preview={preview} info={info} versions={versions} onLatest={onLatest} />}
       <div className="ev-tryit__bar">
         <DeviceSwitch device={device} setDevice={setDevice} />
         <span className="ev-spacer" />
-        {isMission && !comparing && <Button icon="compare" onClick={() => onCompare(preview!.source!)}>Compare with the original</Button>}
+        {(isMission || prev) && !comparing && <Button icon="compare" onClick={() => onCompare(preview!.source!)}>
+          {isMission ? "Compare with the original" : `Compare with version ${prev!.number}`}</Button>}
         <Button design="Transparent" icon="refresh" onClick={() => setFrameKey((k) => k + 1)}>Reload</Button>
         {main.path && <Button design="Transparent" icon="home" onClick={() => main.setPath("")}>Start page</Button>}
         {preview && <a href={main.src} target="_blank" rel="noreferrer" className="ev-linkbtn"><Icon name="action" style={{ width: ".8rem", height: ".8rem", color: "inherit" }} /> Open in a new tab</a>}

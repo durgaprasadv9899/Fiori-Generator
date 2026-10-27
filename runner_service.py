@@ -211,13 +211,18 @@ def open_link(token: str, path: str, request: Request):
     attrs = "; Path=/; HttpOnly; Max-Age=28800"
     attrs += "; Secure; SameSite=None; Partitioned" if _secure(request) else "; SameSite=Lax"
     resp.headers.append("set-cookie", f"{COOKIE}={token}{attrs}")
+    resp.headers["cache-control"] = "no-store"
     return resp
 
 
 _HOP = {"host", "connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "te", "trailer",
-        "transfer-encoding", "upgrade", "content-length", "authorization", "cookie", "accept-encoding"}
+        "transfer-encoding", "upgrade", "content-length", "authorization", "cookie", "accept-encoding",
+        "if-none-match", "if-modified-since"}
 _DROP_RESP = {"content-encoding", "content-length", "transfer-encoding", "connection", "www-authenticate",
-              "x-frame-options", "content-security-policy", "keep-alive"}
+              "x-frame-options", "content-security-policy", "keep-alive",
+              # every preview answers on the same addresses (/, /static/app.css …): a cached page or stylesheet of an
+              # earlier preview would hide the change, so nothing is cached
+              "cache-control", "etag", "last-modified", "expires", "date", "server"}
 
 
 @app.api_route("/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"])
@@ -252,6 +257,7 @@ async def proxy(path: str, request: Request):
         if lk == "location":
             v = _LOCAL_ORIGIN.sub("", v) or "/"
         out.headers.append(k, v)
+    out.headers["cache-control"] = "no-store"
     return out
 
 

@@ -55,6 +55,20 @@ def _dir() -> str:
     return d
 
 
+_INTERRUPTED = "Interrupted — the studio restarted while the AI assistant was working. Run it again; the plan is kept."
+_STORED: Dict[str, float] = {}        # mission id -> when it was last written to the store
+
+
+def _store():
+    """The studio's store (HANA on BTP): AI changes are kept with the projects, so they survive restarts and
+    redeploys — the local folder is only a cache."""
+    try:
+        import workspace
+        return workspace.get_store()
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def save(m: Dict) -> Dict:
     m["updated_at"] = time.time()
     with _LOCK:
@@ -64,6 +78,25 @@ def save(m: Dict) -> Dict:
             json.dump(m, f)
     except OSError:
         pass
+    # while the AI works the mission changes every few seconds: write it to the store at most every 5 s
+    if m.get("status") not in ("working", "understanding") or time.time() - _STORED.get(m["id"], 0) > 5:
+        st = _store()
+        if st and hasattr(st, "put_doc"):
+            try:
+                st.put_doc("mission", m["id"], m.get("project_id") or "", m)
+                _STORED[m["id"]] = time.time()
+            except Exception:  # noqa: BLE001
+                pass
+    return m
+
+
+def _recovered(m: Dict) -> Dict:
+    """A mission read back from disk or the store is not running in this process: if it was working, the studio
+    restarted under it."""
+    if m.get("status") in ("working", "understanding"):
+        m["status"] = "failed"
+        m["error"] = _INTERRUPTED
+        save(m)
     return m
 
 
@@ -73,9 +106,17 @@ def get(mid: str) -> Optional[Dict]:
         try:
             with open(os.path.join(_dir(), mid + ".json"), encoding="utf-8") as f:
                 m = json.load(f)
-            _MISSIONS[mid] = m
         except (OSError, ValueError):
+            st = _store()
+            try:
+                m = st.get_doc(mid) if st and hasattr(st, "get_doc") else None
+            except Exception:  # noqa: BLE001
+                m = None
+        if m is None:
             return None
+        with _LOCK:
+            _MISSIONS[mid] = m
+        _recovered(m)
     return m
 
 
@@ -86,6 +127,16 @@ def list_for(project_id: str) -> List[Dict]:
                 get(name[:-5])
     except OSError:
         pass
+    st = _store()
+    if st and hasattr(st, "list_docs"):
+        try:
+            for m in st.list_docs("mission", project_id):
+                if m.get("id") and m["id"] not in _MISSIONS:
+                    with _LOCK:
+                        _MISSIONS[m["id"]] = m
+                    _recovered(m)
+        except Exception:  # noqa: BLE001
+            pass
     ms = [m for m in _MISSIONS.values() if m.get("project_id") == project_id]
     return sorted(ms, key=lambda m: -m.get("created_at", 0))
 
@@ -100,10 +151,7 @@ def mark_interrupted() -> int:
         return 0
     for name in names:
         m = get(name[:-5])
-        if m and m.get("status") in ("working", "understanding"):
-            m["status"] = "failed"
-            m["error"] = "Interrupted — the studio restarted while the AI assistant was working. Run it again; the plan is kept."
-            save(m)
+        if m and m.get("status") == "failed" and m.get("error") == _INTERRUPTED:
             n += 1
     return n
 
@@ -817,11 +865,13 @@ def _rebuild_committed(ws: Workspace, analysis: Dict, rebuild_fn, say, step) -> 
         if not b.get("committed"):
             continue
         src = b.get("module_path") or ""
-        if any(p.startswith(src + ("" if src else "src/")) and not p.startswith(b["out_dir"] + "/") for p in ws.changes):
+        gen = [b["out_dir"]] + (b.get("copies") or [])
+        if any(p.startswith(src + ("" if src else "src/")) and not any(p.startswith(g + "/") for g in gen) for p in ws.changes):
             outs.append(b)
     if not outs or not rebuild_fn:
         return
-    step("check", "Rebuilding the committed UI bundle (" + ", ".join(b["out_dir"] + "/" for b in outs)
+    step("check", "Rebuilding the committed UI bundle (" + ", ".join(
+        d + "/" for b in outs for d in ([b["out_dir"]] if b.get("out_committed", True) else []) + (b.get("copies") or []))
          + ") so the deployed app shows the change…")
     try:
         r = rebuild_fn(ws.files(), outs, say)
@@ -910,7 +960,8 @@ def _rounds(m: Dict, ws: Workspace, msgs: List[Dict], converse, checks_fn, say, 
 
 def _workspace(files: Dict[str, str], m: Dict, analysis: Dict, brief: Dict, terminal) -> Workspace:
     ws = Workspace(files, m.get("_files") or {}, brief.get("protected"), terminal)
-    ws.generated = [b["out_dir"] for b in analysis.get("build_outputs") or [] if b.get("committed") and b.get("out_dir")]
+    ws.generated = [d for b in analysis.get("build_outputs") or [] if b.get("committed")
+                    for d in ([b["out_dir"]] if b.get("out_committed", True) and b.get("out_dir") else []) + (b.get("copies") or [])]
     return ws
 
 
