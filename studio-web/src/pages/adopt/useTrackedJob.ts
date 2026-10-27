@@ -29,15 +29,20 @@ export function useTrackedJob<R = any>(key: string, onDone: (result: R, job: Job
     remember("");
   }, [job?.status, job?.id]); // eslint-disable-line
 
-  useEffect(() => {                      // finished while the page was closed: fetch the result once
-    if (!id || jobs.get(id)) return;
-    api.get<Job>(`api/jobs/${id}`).then((j) => {
-      if (j.status === "running" || handled.current === j.id) return;
+  const tracked = !!job;
+  useEffect(() => {                      // a job the provider does not follow (reload, lost poll): follow it here
+    if (!id || tracked) return;
+    let stop = false;
+    const check = () => api.get<Job>(`api/jobs/${id}`).then((j) => {
+      if (stop || handled.current === j.id) return;
+      if (j.status === "running") { setTimeout(check, 1500); return; }
       handled.current = j.id;
       if (j.status === "done") done.current(j.result as R, j); else fail.current?.(j.error || "The job failed.", j);
       remember("");
-    }).catch(() => remember(""));
-  }, []); // eslint-disable-line
+    }).catch(() => { if (!stop) remember(""); });
+    const t = setTimeout(check, 400);
+    return () => { stop = true; clearTimeout(t); };
+  }, [id, tracked]); // eslint-disable-line
 
   const start = async (path: string, body: unknown) => {
     const jid = await jobs.start(path, body);
@@ -45,5 +50,6 @@ export function useTrackedJob<R = any>(key: string, onDone: (result: R, job: Job
     remember(jid);
     return jid;
   };
-  return { job, running: !!job && job.status === "running", start, clear: () => remember("") };
+  // a job id we follow but the provider does not know yet still counts as running
+  return { job, running: job ? job.status === "running" : !!id, start, clear: () => remember("") };
 }
