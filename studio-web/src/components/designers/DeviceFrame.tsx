@@ -9,8 +9,8 @@ const SIZES: Record<Device, { w: number | string; h: number }> = {
   phone: { w: 390, h: 700 },
 };
 
-export function DeviceFrame({ device, html, src, title }: { device: Device; html?: string; src?: string; title?: string }) {
-  const s = SIZES[device];
+export function DeviceFrame({ device, html, src, title, height }: { device: Device; html?: string; src?: string; title?: string; height?: number }) {
+  const s = height ? { ...SIZES[device], h: height } : SIZES[device];
   return (
     <div className="ev-device-stage">
       <motion.div

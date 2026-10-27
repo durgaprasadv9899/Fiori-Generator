@@ -64,7 +64,13 @@ export interface Analysis {
   env_vars: string[];
   understanding?: Understanding;
   questions?: Question[];
+  // added later — missing on projects adopted before
+  ui_map?: UiPage[];
+  build_outputs?: { module: string; out_dir: string; committed: boolean; files: number }[];
+  dependencies?: { module: string; name: string; version: string; dev: boolean }[];
+  folders?: { path: string; files: number; lines: number }[];
 }
+export interface UiPage { url: string; screen: string; kind: "spa-route" | "server-page" | "ui5-app" | "static-page" | string; module: string; files: string[] }
 export type MissionStatus = "understanding" | "needs_input" | "planned" | "working" | "ready" | "failed" | "applied" | "discarded";
 export interface MissionStep { at: number; kind: "think" | "read" | "search" | "edit" | "check" | "ask" | "info"; text: string; ok: boolean }
 export interface Mission {
@@ -87,4 +93,8 @@ export interface AdoptProjectInfo {
   source?: { kind?: string; url?: string; label?: string; related?: { app: string; destination: string; url: string }[] };
   missions: MissionSummary[]; runner: { mode: "local" | "remote"; node?: string; python?: string; ok: boolean };
 }
-export interface PreviewInfo { preview_id: string; url: string; kind: string; entry: string; log: string; warnings?: string[] }
+export interface PreviewSource { kind: "version" | "mission"; id: string; label: string; number?: number; version_id?: string }
+export interface PreviewInfo {
+  preview_id: string; url: string; kind: string; entry: string; log: string; warnings?: string[];
+  source?: PreviewSource; slot?: "main" | "base" | string;
+}

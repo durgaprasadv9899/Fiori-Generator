@@ -75,6 +75,14 @@ interface Question {
 | `POST /api/adopt/projects/{pid}/brief` | `{answers}` | saves a new version "Brief updated" → `{version_id}` |
 | `POST /api/jobs/adopt-reanalyze` | `{project_id}` | job → re-analyses the latest version (+ AI understanding) and saves it into the brief version |
 
+`analysis` also carries (completed from the files for projects adopted before these existed):
+`ui_map: {url, screen, kind: "spa-route"|"server-page"|"ui5-app"|"static-page", module, files[]}[]` — every page and
+the files that render it (SPA routes with their router basename, Jinja/Django/EJS templates with the templates they
+extend and their static CSS, UI5 views); `build_outputs: {module, module_path, out_dir, committed, files}[]` — a
+committed bundle (e.g. a React build in the backend's `static/dist`) is protected from AI edits and rebuilt by the
+runner (`/jobs/rebuild`) after a change, so the deployed app shows it; `dependencies: {module, name, version, dev,
+ecosystem}[]`; `folders: {path, files, lines}[]`.
+
 ### Robot (AI agent that changes the project)
 
 ```ts
@@ -115,7 +123,7 @@ interface Mission {
 
 | Route | Body | Result |
 |---|---|---|
-| `POST /api/jobs/adopt-preview` | `{version_id}` or `{mission_id}` | job → `{preview_id, url, kind, entry, log}`; `url` is relative (`api/adopt/preview/<id>/…`) for an iframe |
+| `POST /api/jobs/adopt-preview` | `{version_id}` or `{mission_id}`, `slot?: "main" \| "base"` | job → `{preview_id, url, kind, entry, warnings, source: {kind: "version"\|"mission", id, label, …}, slot}`; one running preview per user and slot. `url` is a signed runner link; the `base` slot (the "before" side of a compare) uses the runner's second host (`RUNNER_COMPARE_URL`, default `<runner>-compare.<domain>`) because the runner picks the preview from a per-host cookie |
 | `GET /api/adopt/preview/{id}/{path}` | — | proxied app |
 | `POST /api/adopt/preview/{id}/stop` | — | `{stopped: true}` |
 | `GET /api/adopt/preview/{id}/log` | — | text |

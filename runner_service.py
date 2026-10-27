@@ -102,7 +102,12 @@ def _w_build(say, files, meta):
     return dict(info, artifact_id=aid, bytes=len(data))
 
 
-_KINDS = {"checks": (_w_checks, "Validating"), "preview": (_w_preview, "Starting preview"), "build": (_w_build, "Building")}
+def _w_rebuild(say, files, meta):
+    return adopt_runner.rebuild_outputs(files, meta.get("outputs") or [], say)
+
+
+_KINDS = {"checks": (_w_checks, "Validating"), "preview": (_w_preview, "Starting preview"), "build": (_w_build, "Building"),
+          "rebuild": (_w_rebuild, "Rebuilding the UI bundle")}
 
 
 @app.post("/jobs/{kind}")

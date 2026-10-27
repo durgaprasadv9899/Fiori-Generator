@@ -19,13 +19,13 @@ export function StackChips({ stack }: { stack: string[] }) {
   return <div className="ev-chiprow">{stack.map((s) => <span key={s} className="ev-chip2">{s}</span>)}</div>;
 }
 
-export function ArchDiagram({ arch }: { arch: ArchNode[][] }) {
+export function ArchDiagram({ arch, vertical }: { arch: ArchNode[][]; vertical?: boolean }) {
   if (!arch?.length) return null;
   return (
-    <div className="ev-arch" role="img" aria-label="How the project fits together">
+    <div className={"ev-arch" + (vertical ? " is-vertical" : "")} role="img" aria-label="How the project fits together">
       {arch.map((col, i) => (
         <Fragment key={i}>
-          {i > 0 && <Icon name="navigation-right-arrow" className="ev-arch__arrow" />}
+          {i > 0 && <Icon name={vertical ? "navigation-down-arrow" : "navigation-right-arrow"} className="ev-arch__arrow" />}
           <div className="ev-arch__col">
             {col.map((n) => (
               <div key={n.id} className={"ev-arch__node" + (n.external ? " is-ext" : "")} title={n.external ? "External system" : undefined}>

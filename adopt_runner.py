@@ -830,9 +830,9 @@ def _find_build_output(root: str, tmp: str, pkg: Dict, since: float) -> str:
         dirs = [d for d in dirs if os.path.exists(os.path.join(d, "index.html"))]
         dirs.sort(key=lambda r: (0 if r.endswith("browser") else 1, len(r)))
         return dirs[0] if dirs else ""
-    for d in _configured_out_dirs(root, pkg):                  # 1. what the project configures
-        if os.path.isdir(d) and os.path.realpath(d).startswith(os.path.realpath(tmp)):
-            hit = best(_index_dirs(d))
+    for d in _configured_out_dirs(root, pkg):                  # 1. what the project configures — written by THIS
+        if os.path.isdir(d) and os.path.realpath(d).startswith(os.path.realpath(tmp)):   # build, never a stale copy
+            hit = best([x for x in _index_dirs(d) if os.path.getmtime(os.path.join(x, "index.html")) >= since])
             if hit:
                 return hit
     fresh = [d for d in _index_dirs(tmp)                         # 2. what this build just wrote
@@ -840,12 +840,46 @@ def _find_build_output(root: str, tmp: str, pkg: Dict, since: float) -> str:
     hit = best(fresh)
     if hit:
         return hit
-    conv = []                                                    # 3. the usual folders
+    conv = []                                                    # 3. the usual folders (fresh only)
     for base in ("dist", "build", "out", "www"):
         d = os.path.join(root, base)
         if os.path.isdir(d):
-            conv += _index_dirs(d)
+            conv += [x for x in _index_dirs(d) if os.path.getmtime(os.path.join(x, "index.html")) >= since]
     return best(conv)
+
+
+def rebuild_outputs(files: Dict[str, str], outputs: List[Dict], say: Callable[[str], None] = lambda m: None) -> Dict:
+    """Rebuild committed UI bundles (e.g. a React build in a backend's static/dist) from the changed sources, so
+    what is deployed shows the change. Returns {"files": {path: content}, "out_dirs": [...], "errors": [...]}."""
+    tmp = _sandbox(files, prefix="evoke-rebuild-")
+    env = child_env()
+    out: Dict[str, str] = {}
+    done, errors = [], []
+    try:
+        for b in outputs:
+            mod = {"path": b.get("module_path") or "", "name": b.get("module") or "frontend", "kind": "react"}
+            target = os.path.join(tmp, *b["out_dir"].split("/"))
+            t0 = time.time() - 1
+            found, err = _web_build(mod, tmp, env, say)
+            if err and err != "NO_OUTPUT":
+                errors.append(f"{b['module']}: {err[-800:]}")
+                continue
+            if not os.path.isdir(target):
+                errors.append(f"{b['module']}: the build did not write {b['out_dir']}/")
+                continue
+            built, _ = adopt_files.from_dir(target)
+            built = {p: c for p, c in built.items()                   # only what this build wrote
+                     if os.path.getmtime(os.path.join(target, *p.split("/"))) >= t0}
+            if not built:
+                errors.append(f"{b['module']}: the build wrote nothing new into {b['out_dir']}/")
+                continue
+            for p, c in built.items():
+                out[b["out_dir"] + "/" + p] = c
+            done.append(b["out_dir"])
+            say(f"Rebuilt {b['out_dir']}/ ({len(built)} files)")
+    finally:
+        _rmtree(tmp)
+    return {"files": out, "out_dirs": done, "errors": errors}
 
 
 def _dev_server_cmd(root: str, pkg: Dict, port: int) -> str:

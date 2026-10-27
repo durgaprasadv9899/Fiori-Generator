@@ -1,19 +1,23 @@
 // Workspace of an adopted project (shown inside the project page): overview, the AI assistant (changes the
 // project with a reviewed diff), live preview, data & screens, project brief, deploy. One column, aligned rows.
-import { useEffect, useMemo, useState } from "react";
-import { Button, Icon, Input, MessageStrip, Option, SegmentedButton, SegmentedButtonItem, Select, BusyIndicator } from "@ui5/webcomponents-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Button, Icon, Input, MessageStrip, Option, Select, BusyIndicator } from "@ui5/webcomponents-react";
 import { Card, KpiTile, LiveTimeline, Skeleton, StatusBadge, EmptyState, ago } from "../../components/ui";
 import { useApi } from "../../components/shell/useApi";
 import { useToast } from "../../components/shell/Toasts";
 import type { TabDef } from "../../components/shell/Tabs";
 import { DeviceFrame, type Device } from "../../components/designers/DeviceFrame";
 import { api } from "../../api/client";
-import type { AdoptProjectInfo, Answers, Mission, MissionSummary, PreviewInfo, Suggestion, VersionMeta } from "../../api/types";
+import type { AdoptProjectInfo, Answers, Mission, MissionSummary, PreviewSource, Suggestion, VersionMeta } from "../../api/types";
 import { Fact, FormRow, QuestionList, questionsFromBrief } from "./Questions";
 import {
-  ArchDiagram, ChecksSummary, DiffView, EndpointsTable, EntityCards, Findings, LanguageBar, ModuleCards,
-  Markdown, ScreensTable, StackChips, UnderstandingBlock,
+  ArchDiagram, ChecksSummary, DiffView, Findings, LanguageBar, ModuleCards,
+  Markdown, StackChips, UnderstandingBlock,
 } from "./parts";
+import { AppDetails, detailCounts, type DetailKey } from "./details";
+import {
+  CompareView, DeviceSwitch, SourceStrip, StartingPanel, Warnings, bodyOf, describeSource, usePreviewSlot, versionSource, type PreviewSlot,
+} from "./preview";
 import { useTrackedJob } from "./useTrackedJob";
 import "./adopt.css";
 
@@ -39,30 +43,68 @@ export function AdoptedWorkspace({ pid, tab, setTab, versions, mayEdit, mayDeplo
   const toast = useToast();
   const { data: info, error, loading, reload } = useApi<AdoptProjectInfo>(`api/adopt/projects/${pid}`, { deps: [pid] });
   const [draft, setDraft] = useState("");
-  const [preview, setPreviewState] = useState<PreviewInfo | null>(() => ss.get(`evoke.adopt.preview.${pid}`, null));
-  const setPreview = (p: PreviewInfo | null) => { setPreviewState(p); ss.set(`evoke.adopt.preview.${pid}`, p); };
-  const [previewErr, setPreviewErr] = useState("");
-  const previewJob = useTrackedJob<PreviewInfo>(`adopt-preview.${pid}`, (r) => { setPreview(r); setPreviewErr(""); toast("Preview is running"); },
-    (e) => setPreviewErr(e));
-  const startPreview = async (body: { version_id?: string; mission_id?: string }) => {
-    setTab("tryit"); setPreviewErr("");
-    try { await previewJob.start("api/jobs/adopt-preview", body); } catch (e: any) { setPreviewErr(e.message); }
+  const [detail, setDetail] = useState<DetailKey>("pages");
+  const main = usePreviewSlot(pid, "main");
+  const base = usePreviewSlot(pid, "base");
+
+  /** Start (or restart) the main preview with a version or an AI change; `show` opens the Try it tab. */
+  const startPreview = (src: PreviewSource, show = true) => {
+    if (show) setTab("tryit");
+    return main.start(bodyOf(src), src);
+  };
+  const latest = () => info && startPreview(versionSource(info, info.version.id, versions), false);
+  /** Before / after: the original version (base slot) next to the AI change (main slot). */
+  const compare = async (missionId: string, request: string, baseVid?: string) => {
+    setTab("tryit");
+    let vid = baseVid;
+    if (!vid) { try { vid = (await api.get<Mission>(`api/adopt/missions/${missionId}`)).version_id; } catch (e: any) { toast(e.message, "error"); return; } }
+    if (!(main.preview?.source?.kind === "mission" && main.preview.source.id === missionId) && !main.running)
+      main.start({ mission_id: missionId }, { kind: "mission", id: missionId, label: request });
+    if (info) base.start({ version_id: vid }, versionSource(info, vid, versions));
+  };
+  const openPage = (url: string, show: boolean) => {
+    if (!main.preview && !main.running && info) startPreview(versionSource(info, info.version.id, versions), false);
+    main.setPath(url);
+    if (show) setTab("tryit");
   };
   const ask = (request: string) => { setDraft(request); setTab("robot"); };
   const changed = () => { reload(true); onChanged(); };
 
+  // the working application appears on the overview by itself: start it once per project and browser session
+  useEffect(() => {
+    if (!info || tab !== "overview" || !info.runner?.ok || main.preview || main.running) return;
+    const flag = `evoke.adopt.autostart.${pid}`;
+    try { if (sessionStorage.getItem(flag)) return; sessionStorage.setItem(flag, "1"); } catch { return; }
+    startPreview(versionSource(info, info.version.id, versions), false);
+  }, [info?.version.id, tab]); // eslint-disable-line
+
   if (error) return <MessageStrip design="Negative" hideCloseButton>{error}</MessageStrip>;
-  if (loading && !info) return <div style={{ display: "grid", gap: "1rem" }}><Skeleton height={140} radius={16} /><Skeleton height={260} radius={16} /></div>;
+  if (loading && !info) return (
+    <div className="ev-aw">
+      <Skeleton height={150} radius={18} />
+      <div className="ev-ov__kpis">{[0, 1, 2, 3, 4, 5].map((i) => <Skeleton key={i} height={96} radius={14} />)}</div>
+      <Skeleton height={420} radius={16} />
+    </div>
+  );
   if (!info) return null;
 
   return (
     <div className="ev-aw">
-      {tab === "overview" && <Overview pid={pid} info={info} mayEdit={mayEdit} onAsk={ask} onTab={setTab} onChanged={changed} />}
+      {tab === "overview" && <Overview pid={pid} info={info} versions={versions} mayEdit={mayEdit} onAsk={ask} onTab={setTab} onChanged={changed}
+        main={main} onStart={() => startPreview(main.preview?.source || versionSource(info, info.version.id, versions), false)} onLatest={latest}
+        detail={detail} setDetail={setDetail} onOpenPage={(u) => openPage(u, false)} />}
       {tab === "robot" && <Assistant pid={pid} info={info} draft={draft} setDraft={setDraft} mayEdit={mayEdit}
-        onPreview={(mid) => startPreview({ mission_id: mid })} onApplied={changed} />}
-      {tab === "tryit" && <TryIt info={info} preview={preview} setPreview={setPreview} job={previewJob} err={previewErr}
-        onStart={() => startPreview({ version_id: info.version.id })} />}
-      {(tab === "model" || tab === "screens") && <DataAndScreens info={info} mayEdit={mayEdit} onAsk={ask} />}
+        onPreview={(m) => startPreview({ kind: "mission", id: m.id, label: m.request })}
+        onCompare={(m) => compare(m.id, m.request, m.version_id)} onApplied={changed} />}
+      {tab === "tryit" && <TryIt info={info} versions={versions} main={main} base={base}
+        onStart={() => startPreview(main.preview?.source || versionSource(info, info.version.id, versions), false)}
+        onLatest={latest}
+        onCompare={(src) => compare(src.id, src.label)} />}
+      {(tab === "model" || tab === "screens") && (
+        <Card title="Application details" icon="detail-view" subtitle="Everything the analysis found. Open a page to see it running in Try it.">
+          <AppDetails info={info} section={detail} setSection={setDetail} mayEdit={mayEdit} onAsk={ask} onOpenPage={(u) => openPage(u, true)} />
+        </Card>
+      )}
       {tab === "brief" && <Brief pid={pid} info={info} mayEdit={mayEdit} onSaved={changed} />}
       {tab === "deploy" && <Deploy info={info} versions={versions} mayDeploy={mayDeploy} vid={deployVid || info.version.id} setVid={setDeployVid} onDone={changed} />}
     </div>
@@ -70,14 +112,27 @@ export function AdoptedWorkspace({ pid, tab, setTab, versions, mayEdit, mayDeplo
 }
 
 // ── overview ─────────────────────────────────────────────────────────────────
-function Overview({ pid, info, mayEdit, onAsk, onTab, onChanged }: {
-  pid: string; info: AdoptProjectInfo; mayEdit: boolean; onAsk: (r: string) => void; onTab: (t: string) => void; onChanged: () => void;
+const SOURCE_ICON: Record<string, string> = { zip: "attachment-zip-file", git: "source-code", cf: "cloud" };
+const SOURCE_TEXT: Record<string, string> = { zip: "ZIP upload", git: "Git repository", cf: "Cloud Foundry" };
+
+function firstSentence(t: string): string {
+  const s = (t || "").replace(/\s+/g, " ").trim();
+  const m = /^(.{40,220}?[.!?])\s/.exec(s + " ");
+  return m ? m[1] : s.length > 220 ? s.slice(0, 220) + "…" : s;
+}
+
+function Overview({ pid, info, versions, mayEdit, onAsk, onTab, onChanged, main, onStart, onLatest, detail, setDetail, onOpenPage }: {
+  pid: string; info: AdoptProjectInfo; versions: VersionMeta[]; mayEdit: boolean; onAsk: (r: string) => void; onTab: (t: string) => void;
+  onChanged: () => void; main: PreviewSlot; onStart: () => void; onLatest: () => void;
+  detail: DetailKey; setDetail: (d: DetailKey) => void; onOpenPage: (url: string) => void;
 }) {
   const toast = useToast();
   const a = info.analysis;
   const [sugg, setSugg] = useState<Suggestion[]>(() => a.understanding?.suggested_missions || []);
   const [moreAbout, setMoreAbout] = useState(false);
   const [allSugg, setAllSugg] = useState(false);
+  const detailsRef = useRef<HTMLDivElement>(null);
+  const liveRef = useRef<HTMLDivElement>(null);
   const suggest = useTrackedJob<{ suggestions: Suggestion[] }>(`robot-suggest.${pid}`, (r) => setSugg(r.suggestions || []),
     (e) => toast(`Suggestions failed: ${e}`, "error"));
   const reanalyze = useTrackedJob(`adopt-reanalyze.${pid}`, () => { toast("Analysis refreshed"); onChanged(); }, (e) => toast(`Analysis failed: ${e}`, "error"));
@@ -85,49 +140,74 @@ function Overview({ pid, info, mayEdit, onAsk, onTab, onChanged }: {
   const b = info.brief || {};
   const protectedPaths = Array.isArray(b.protected) ? b.protected : [];
   const purpose = String(b.purpose || a.understanding?.summary || "");
-  const target = { mta: "MTA build + deploy", "cf-push": "cf push to Cloud Foundry", "git-pr": "Pull request to Git", download: "Download only" }[String(b.deploy_target)] || String(b.deploy_target || "—");
+  const target = { mta: "MTA build + deploy", "cf-push": "cf push to Cloud Foundry", "git-pr": "Pull request to Git", download: "Download only" }[String(b.deploy_target)] || String(b.deploy_target || "");
   const findings = a.findings || [];
+  const counts = detailCounts(a);
+  const srcKind = info.source?.kind || a.source.kind;
+  const go = (d: DetailKey) => { setDetail(d); detailsRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }); };
+  const openPage = (url: string) => { onOpenPage(url); liveRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }); };
+  const startReanalyse = () => reanalyze.start("api/jobs/adopt-reanalyze", { project_id: pid }).catch((e) => toast(e.message, "error"));
+
   return (
     <div className="ev-ov">
+      <section className="ev-hero">
+        <div className="ev-hero__main">
+          <div className="ev-hero__eyebrow">
+            <Icon name={SOURCE_ICON[srcKind] || "inbox"} />Adopted from {SOURCE_TEXT[srcKind] || srcKind}
+            {a.source.label && <span className="ev-hero__dim">· {a.source.label}</span>}
+          </div>
+          <h2 className="ev-hero__title">{info.project?.name || a.name}</h2>
+          {purpose && <p className={"ev-hero__lead" + (moreAbout ? " is-open" : "")}>{moreAbout ? purpose : firstSentence(purpose)}</p>}
+          {purpose.length > firstSentence(purpose).length && <button className="ev-linkbtn" onClick={() => setMoreAbout(!moreAbout)}>{moreAbout ? "Show less" : "Read more"}</button>}
+          <StackChips stack={a.stack} />
+          <div className="ev-hero__meta">
+            <span><Icon name="save" />Version {info.version.number}</span>
+            <span><Icon name="document" />{a.files.toLocaleString()} files</span>
+            {target && <span><Icon name="cloud" />{target}</span>}
+            <span className={info.runner?.ok ? "is-good" : "is-warn"}><Icon name={info.runner?.ok ? "machine" : "alert"} />
+              Sandbox {info.runner?.ok ? "ready" : "unavailable"}{info.runner?.node ? ` · Node ${info.runner.node}` : ""}{info.runner?.python ? ` · Python ${info.runner.python}` : ""}</span>
+            {protectedPaths.length > 0 && <span title={protectedPaths.join(", ")}><Icon name="locked" />{protectedPaths.length} protected path{protectedPaths.length === 1 ? "" : "s"}</span>}
+            {info.source?.url && <a href={info.source.url} target="_blank" rel="noreferrer"><Icon name="action" />Deployed app</a>}
+          </div>
+        </div>
+        <div className="ev-hero__actions">
+          <Button design="Emphasized" icon="ai" disabled={!mayEdit} onClick={() => onTab("robot")}>Ask AI</Button>
+          <Button icon="play" onClick={() => onTab("tryit")}>Open preview</Button>
+          {mayEdit && <Button design="Transparent" icon="refresh" disabled={reanalyze.running} onClick={startReanalyse}>{reanalyze.running ? "Analysing…" : "Re-analyse"}</Button>}
+          <Button design="Transparent" icon="edit" onClick={() => onTab("brief")}>Edit brief</Button>
+        </div>
+      </section>
+
       <div className="ev-ov__kpis">
-        <KpiTile label="Modules" value={a.modules.length} icon="dimension" tone="brand" hint={a.modules.map((m) => m.name).join(" · ")} />
-        <KpiTile label="Entities" value={a.model.entities.length} icon="database" tone="good" hint={a.model.source || "no data model"} onClick={() => onTab("model")} />
-        <KpiTile label="Screens & APIs" value={a.screens.length + a.endpoints.length} icon="screen-split-three" tone="neutral"
-          hint={`${a.screens.length} screens · ${a.endpoints.length} endpoints`} onClick={() => onTab("model")} />
-        <KpiTile label="AI changes" value={applied} icon="ai" tone="brand" hint={`${info.missions.length} requests`} onClick={() => onTab("robot")} />
+        <KpiTile label="Modules" value={a.modules.length} icon="dimension" tone="brand" hint={a.modules.map((m) => m.name).join(" · ")} onClick={() => go("structure")} />
+        <KpiTile label="Pages & screens" value={counts.pages} icon="screen-split-three" tone="good" hint="Open any page in the live app" onClick={() => go("pages")} delay={0.04} />
+        <KpiTile label="APIs" value={counts.apis} icon="chain-link" tone="neutral" hint="HTTP endpoints" onClick={() => go("apis")} delay={0.08} />
+        <KpiTile label="Entities" value={counts.data} icon="database" tone="good" hint={a.model.source || "no data model"} onClick={() => go("data")} delay={0.12} />
+        <KpiTile label="Dependencies" value={counts.deps} icon="course-book" tone="neutral" hint={counts.deps ? "packages used" : "re-analyse to list them"} onClick={() => go("deps")} delay={0.16} />
+        <KpiTile label="AI changes" value={applied} icon="ai" tone="brand" hint={`${info.missions.length} request${info.missions.length === 1 ? "" : "s"}`} onClick={() => onTab("robot")} delay={0.2} />
       </div>
 
-      <Card title="About this project" icon="hint" subtitle={`${a.files} files · source ${a.source.label || a.source.kind}`}
-        actions={<Button design="Transparent" icon="edit" onClick={() => onTab("brief")}>Edit brief</Button>}>
-        {purpose && <>
-          <p className={"ev-ov__purpose" + (moreAbout ? " is-open" : "")}>{purpose}</p>
-          {purpose.length > 320 && <button className="ev-linkbtn" onClick={() => setMoreAbout(!moreAbout)}>{moreAbout ? "Show less" : "Show more"}</button>}
-        </>}
-        <div className="ev-facts" style={{ marginTop: ".8rem" }}>
-          <Fact label="Stack"><StackChips stack={a.stack} /></Fact>
-          <Fact label="Deploys to">{target}</Fact>
-          <Fact label="Never changed by AI">{protectedPaths.length ? <span className="ev-mono">{protectedPaths.join(", ")}</span> : "nothing protected"}</Fact>
-          <Fact label="Sandbox">
-            <StatusBadge tone={info.runner?.ok ? "good" : "warn"} icon={info.runner?.ok ? "machine" : "alert"}>{info.runner?.ok ? "available" : "unavailable"}</StatusBadge>
-            {info.runner?.node && <span className="ev-muted ev-small">&nbsp; Node {info.runner.node}</span>}
-            {info.runner?.python && <span className="ev-muted ev-small">&nbsp;· Python {info.runner.python}</span>}
-          </Fact>
-        </div>
-      </Card>
+      <div ref={liveRef} className="ev-anchor">
+        <LiveApp info={info} versions={versions} main={main} onStart={onStart} onLatest={onLatest} onFull={() => onTab("tryit")} />
+      </div>
 
-      <Card title="Architecture" icon="org-chart" subtitle="How the parts of the project connect">
-        <ArchDiagram arch={a.arch} />
-        <div style={{ marginTop: ".9rem" }}><LanguageBar languages={a.languages} /></div>
-      </Card>
+      <div ref={detailsRef} className="ev-anchor">
+        <Card title="Application details" icon="detail-view" subtitle="Every page, API, entity, integration, package and folder the analysis found.">
+          <AppDetails info={info} section={detail} setSection={setDetail} mayEdit={mayEdit} onAsk={onAsk} onOpenPage={openPage} />
+        </Card>
+      </div>
 
-      <Card title="Business scenario" icon="ai" subtitle="How the AI reads the project. Correct it in the project brief if something is wrong."
-        actions={mayEdit && <Button design="Transparent" icon="refresh" disabled={reanalyze.running}
-          onClick={() => reanalyze.start("api/jobs/adopt-reanalyze", { project_id: pid }).catch((e) => toast(e.message, "error"))}>
-          {reanalyze.running ? "Analysing…" : "Re-analyse"}</Button>}>
-        {reanalyze.running ? <LiveTimeline messages={reanalyze.job?.messages || []} running /> :
-          a.understanding?.summary ? <UnderstandingBlock u={a.understanding} hideSummary={!!purpose && purpose === a.understanding.summary} /> :
-            <div className="ev-muted ev-small">No AI summary yet. Click Re-analyse to let the AI read the code.</div>}
-      </Card>
+      <div className="ev-ov__split">
+        <Card title="Business scenario" icon="ai" subtitle="How the AI reads the project. Correct it in the project brief if something is wrong.">
+          {reanalyze.running ? <LiveTimeline messages={reanalyze.job?.messages || []} running /> :
+            a.understanding?.summary ? <UnderstandingBlock u={a.understanding} hideSummary={!!purpose && purpose === a.understanding.summary} /> :
+              <div className="ev-muted ev-small">No AI summary yet. Click Re-analyse to let the AI read the code.</div>}
+        </Card>
+        <Card title="Architecture" icon="org-chart" subtitle="How the parts connect">
+          <ArchDiagram arch={a.arch} vertical />
+          <div style={{ marginTop: ".9rem" }}><LanguageBar languages={a.languages} /></div>
+        </Card>
+      </div>
 
       <div className="ev-ov__pair">
         <Card title="Suggested changes" icon="lightbulb" subtitle="Pick one to start an AI request"
@@ -160,32 +240,43 @@ function Overview({ pid, info, mayEdit, onAsk, onTab, onChanged }: {
   );
 }
 
-// ── data & screens ───────────────────────────────────────────────────────────
-function DataAndScreens({ info, mayEdit, onAsk }: { info: AdoptProjectInfo; mayEdit: boolean; onAsk: (r: string) => void }) {
-  const a = info.analysis;
+/** The running application, embedded on the overview. */
+function LiveApp({ info, versions, main, onStart, onLatest, onFull }: {
+  info: AdoptProjectInfo; versions: VersionMeta[]; main: PreviewSlot; onStart: () => void; onLatest: () => void; onFull: () => void;
+}) {
+  const [device, setDevice] = useState<Device>("desktop");
+  const [frameKey, setFrameKey] = useState(0);
+  const p = main.preview;
   return (
-    <>
-      <Card title="Data model" icon="database" subtitle={a.model.entities.length ? `${a.model.entities.length} entities from ${a.model.source}. ` +
-        "Add a field below or ask the AI — you review the diff before anything is saved." : undefined}>
-        {a.model.entities.length === 0 ? <div className="ev-muted ev-small">No CDS model, OData metadata, ORM models or SQL tables were recognised.</div> : (
-          <EntityCards entities={a.model.entities} onAddField={mayEdit ? (e, f, t) => onAsk(
-            `Add a field "${f}" (${t}) to the ${e} entity. Show it in the list and on the detail/object page, add the labels to i18n, ` +
-            `include it in sample/seed data, and keep existing validations working.`) : undefined} />)}
-        {a.model.services?.length > 0 && (
-          <div className="ev-facts" style={{ marginTop: "1rem" }}>
-            {a.model.services.map((sv) => (
-              <Fact key={sv.name} label={sv.name}><span className="ev-mono">{sv.path || "—"}</span>
-                {sv.actions?.length ? <span className="ev-muted"> · actions: {sv.actions.join(", ")}</span> : null}</Fact>
-            ))}
+    <Card title="Live application" icon="play" className="ev-live"
+      subtitle={p ? "The app running in the sandbox with its own backend — click through it like a user." : "The existing application, running in the sandbox."}
+      actions={p && !main.running && <div className="ev-live__acts">
+        <DeviceSwitch device={device} setDevice={setDevice} />
+        <Button design="Transparent" icon="refresh" tooltip="Reload the page" onClick={() => setFrameKey((k) => k + 1)} />
+        <Button design="Transparent" icon="restart" tooltip="Restart the app in the sandbox" onClick={onStart} />
+        <a className="ev-iconlink" href={main.src} target="_blank" rel="noreferrer" title="Open in a new tab"><Icon name="action" /></a>
+        <Button design="Transparent" icon="full-screen" onClick={onFull}>Full view</Button>
+      </div>}>
+      {main.running ? <StartingPanel messages={main.job.job?.messages || []} /> :
+        p ? (
+          <>
+            <SourceStrip preview={p} info={info} versions={versions} onLatest={onLatest} />
+            <Warnings warnings={p.warnings} />
+            <DeviceFrame key={frameKey + main.src} device={device} src={main.src} title={main.path || p.entry} height={540} />
+          </>
+        ) : (
+          <div className="ev-live__empty">
+            {main.err && <MessageStrip design="Negative" hideCloseButton>{main.err}</MessageStrip>}
+            <div className="ev-live__ph">
+              <div className="ev-live__phicon"><Icon name="play" /></div>
+              <div><b>{main.err ? "The application did not start" : "See the application working"}</b>
+                <span>{info.runner?.ok ? "Starts the latest version in the sandbox with its backend and sample data. Nothing is deployed."
+                  : "The sandbox is not available, so the app cannot be started here."}</span></div>
+              <Button design="Emphasized" icon="play" disabled={!info.runner?.ok} onClick={onStart}>{main.err ? "Try again" : "Start the app"}</Button>
+            </div>
           </div>
         )}
-      </Card>
-      <Card title="Screens" icon="screen-split-three" subtitle="Fiori Elements pages change through annotations; custom code is changed by AI with a diff."
-        actions={mayEdit && <Button icon="ai" design="Transparent" onClick={() => onAsk("Add a new screen that ")}>Ask AI for a new screen</Button>}>
-        <ScreensTable a={a} />
-      </Card>
-      {a.endpoints.length > 0 && <Card title="API endpoints" icon="chain-link"><EndpointsTable a={a} /></Card>}
-    </>
+    </Card>
   );
 }
 
@@ -198,9 +289,9 @@ const STATUS_TEXT: Record<string, string> = {
   failed: "failed", applied: "applied", discarded: "discarded",
 };
 
-function Assistant({ pid, info, draft, setDraft, mayEdit, onPreview, onApplied }: {
+function Assistant({ pid, info, draft, setDraft, mayEdit, onPreview, onCompare, onApplied }: {
   pid: string; info: AdoptProjectInfo; draft: string; setDraft: (s: string) => void; mayEdit: boolean;
-  onPreview: (missionId: string) => void; onApplied: () => void;
+  onPreview: (m: Mission) => void; onCompare: (m: Mission) => void; onApplied: () => void;
 }) {
   const toast = useToast();
   const mkey = `evoke.adopt.mission.${pid}`;
@@ -294,7 +385,7 @@ function Assistant({ pid, info, draft, setDraft, mayEdit, onPreview, onApplied }
         </Card>
       )}
       {m && <MissionView m={m} answers={answers} setAnswers={setAnswers} working={working} mayEdit={mayEdit} busy={busy}
-        onRun={go} onApply={() => act("apply")} onDiscard={() => act("discard")} onPreview={() => onPreview(m.id)}
+        onRun={go} onApply={() => act("apply")} onDiscard={() => act("discard")} onPreview={() => onPreview(m)} onCompare={() => onCompare(m)}
         reviseOpen={reviseOpen} setReviseOpen={setReviseOpen} feedback={feedback} setFeedback={setFeedback} onRevise={revise}
         onNew={newRequest} />}
       <Card title="Previous requests" icon="history" subtitle={`${missions.length} so far`}
@@ -321,10 +412,10 @@ function Assistant({ pid, info, draft, setDraft, mayEdit, onPreview, onApplied }
   );
 }
 
-function MissionView({ m, answers, setAnswers, working, mayEdit, busy, onRun, onApply, onDiscard, onPreview, reviseOpen, setReviseOpen,
+function MissionView({ m, answers, setAnswers, working, mayEdit, busy, onRun, onApply, onDiscard, onPreview, onCompare, reviseOpen, setReviseOpen,
   feedback, setFeedback, onRevise, onNew }: {
   m: Mission; answers: Record<string, string>; setAnswers: (a: Record<string, string>) => void; working: boolean; mayEdit: boolean; busy: string;
-  onRun: (useDefaults?: boolean) => void; onApply: () => void; onDiscard: () => void; onPreview: () => void;
+  onRun: (useDefaults?: boolean) => void; onApply: () => void; onDiscard: () => void; onPreview: () => void; onCompare: () => void;
   reviseOpen: boolean; setReviseOpen: (b: boolean) => void; feedback: string; setFeedback: (s: string) => void; onRevise: () => void; onNew: () => void;
 }) {
   const done = ["ready", "failed", "applied", "discarded"].includes(m.status);
@@ -434,10 +525,17 @@ function MissionView({ m, answers, setAnswers, working, mayEdit, busy, onRun, on
                   <span className="ev-mono">{c.path}</span><span className="ev-add">+{c.additions}</span><span className="ev-del">−{c.deletions}</span></span>
               ))}</div></Fact>}
           </div>
+          {m.status === "applied" && m.changes?.length > 0 && (
+            <div className="ev-actions">
+              <Button icon="play" disabled={working} onClick={onPreview}>Preview this change</Button>
+              <Button icon="compare" disabled={working} onClick={onCompare}>Compare with the original</Button>
+            </div>
+          )}
           {(m.status === "ready" || m.status === "failed") && (
             <div className="ev-actions">
               {m.status === "ready" && <Button design="Emphasized" icon="save" disabled={!mayEdit || !!busy || working} onClick={onApply}>{busy === "apply" ? "Saving…" : "Apply as new version"}</Button>}
               {m.changes?.length > 0 && <Button icon="play" disabled={working} onClick={onPreview}>Preview this change</Button>}
+              {m.changes?.length > 0 && <Button icon="compare" disabled={working} onClick={onCompare}>Compare with the original</Button>}
               <Button icon="edit" disabled={!mayEdit || working} onClick={() => setReviseOpen(!reviseOpen)}>{m.status === "failed" ? "Try again with guidance" : "Revise"}</Button>
               <Button design="Transparent" icon="delete" disabled={!mayEdit || !!busy || working} onClick={onDiscard}>Discard</Button>
             </div>
@@ -477,65 +575,64 @@ function MissionView({ m, answers, setAnswers, working, mayEdit, busy, onRun, on
 }
 
 // ── try it ───────────────────────────────────────────────────────────────────
-function TryIt({ info, preview, setPreview, job, err, onStart }: {
-  info: AdoptProjectInfo; preview: PreviewInfo | null; setPreview: (p: PreviewInfo | null) => void;
-  job: ReturnType<typeof useTrackedJob<PreviewInfo>>; err: string; onStart: () => void;
+function TryIt({ info, versions, main, base, onStart, onLatest, onCompare }: {
+  info: AdoptProjectInfo; versions: VersionMeta[]; main: PreviewSlot; base: PreviewSlot;
+  onStart: () => void; onLatest: () => void; onCompare: (src: PreviewSource) => void;
 }) {
   const toast = useToast();
   const [device, setDevice] = useState<Device>("desktop");
   const [log, setLog] = useState("");
   const [frameKey, setFrameKey] = useState(0);
+  const preview = main.preview;
+  const comparing = !!(base.preview || base.running || base.err);
   const stop = async () => {
-    if (!preview) return;
-    try { await api.post(`api/adopt/preview/${preview.preview_id}/stop`, {}); } catch { /* already gone */ }
-    setPreview(null); setLog(""); toast("Preview stopped", "info");
+    await Promise.all([main.stop(), base.stop()]);
+    setLog(""); toast("Preview stopped", "info");
   };
   const showLog = async () => {
     if (!preview) return;
     try { setLog(await api.text(`api/adopt/preview/${preview.preview_id}/log`)); } catch (e: any) { setLog(e.message); }
   };
-  if (job.running) return (
-    <Card title="Starting the preview" icon="play" subtitle="Installing dependencies and starting the app in the sandbox. The first start of a project takes longest.">
-      <LiveTimeline messages={job.job?.messages.length ? job.job.messages : ["Starting…"]} running />
-    </Card>
+  if (main.running && !comparing) return (
+    <Card title="Try the app" icon="play"><StartingPanel messages={main.job.job?.messages || []} /></Card>
   );
-  if (!preview) return (
+  if (!preview && !main.running) return (
     <Card title="Try the app" icon="play">
-      {err && <MessageStrip design="Negative" hideCloseButton style={{ marginBottom: ".8rem" }}>{err}</MessageStrip>}
-      {err && job.job?.messages?.length ? <pre className="ev-log" style={{ marginBottom: ".8rem" }}>{job.job.messages.join("\n")}</pre> : null}
+      {main.err && <MessageStrip design="Negative" hideCloseButton style={{ marginBottom: ".8rem" }}>{main.err}</MessageStrip>}
+      {main.err && main.job.job?.messages?.length ? <pre className="ev-log" style={{ marginBottom: ".8rem" }}>{main.job.job.messages.join("\n")}</pre> : null}
       <EmptyState icon="play" title="Run the app in the sandbox"
-        text={`Starts version ${info.version.number} with the preview setup from the project brief. Nothing is deployed.`}
+        text={`Starts version ${info.version.number} with its backend and the preview setup from the project brief. Nothing is deployed.`}
         action={<div className="ev-row" style={{ justifyContent: "center" }}>
-          <Button design="Emphasized" icon="play" disabled={!info.runner?.ok} onClick={onStart}>Start preview</Button>
+          <Button design="Emphasized" icon="play" disabled={!info.runner?.ok} onClick={onLatest}>Start preview</Button>
           {info.source?.url && <a className="ev-linkbtn" href={info.source.url} target="_blank" rel="noreferrer">Open the deployed app ↗</a>}
         </div>} />
       {!info.runner?.ok && <div className="ev-muted ev-small" style={{ textAlign: "center" }}>The sandbox is not available, so the app cannot be started here.</div>}
     </Card>
   );
+  const isMission = preview?.source?.kind === "mission";
   return (
-    <Card title="Try the app" icon="play" subtitle={`${preview.kind}${preview.entry ? ` · ${preview.entry}` : ""}`}>
+    <Card title="Try the app" icon="play" subtitle={preview ? `${preview.kind}${main.path || preview.entry ? ` · ${main.path || preview.entry}` : ""}` : "Starting…"}>
+      {preview && !main.running && <SourceStrip preview={preview} info={info} versions={versions} onLatest={onLatest} />}
       <div className="ev-tryit__bar">
-        <SegmentedButton accessibleName="Device" onSelectionChange={(e) => setDevice(((e.detail.selectedItems[0] as any)?.dataset?.device || "desktop") as Device)}>
-          {(["desktop", "tablet", "phone"] as Device[]).map((d) => (
-            <SegmentedButtonItem key={d} data-device={d} selected={device === d} icon={d === "desktop" ? "laptop" : d === "tablet" ? "ipad" : "iphone"}>{d}</SegmentedButtonItem>
-          ))}
-        </SegmentedButton>
+        <DeviceSwitch device={device} setDevice={setDevice} />
         <span className="ev-spacer" />
+        {isMission && !comparing && <Button icon="compare" onClick={() => onCompare(preview!.source!)}>Compare with the original</Button>}
         <Button design="Transparent" icon="refresh" onClick={() => setFrameKey((k) => k + 1)}>Reload</Button>
-        <a href={preview.url} target="_blank" rel="noreferrer" className="ev-linkbtn"><Icon name="action" style={{ width: ".8rem", height: ".8rem", color: "inherit" }} /> Open in a new tab</a>
+        {main.path && <Button design="Transparent" icon="home" onClick={() => main.setPath("")}>Start page</Button>}
+        {preview && <a href={main.src} target="_blank" rel="noreferrer" className="ev-linkbtn"><Icon name="action" style={{ width: ".8rem", height: ".8rem", color: "inherit" }} /> Open in a new tab</a>}
         {info.source?.url && <a href={info.source.url} target="_blank" rel="noreferrer" className="ev-linkbtn">Deployed app ↗</a>}
-        <Button design="Transparent" icon="document-text" onClick={showLog}>Log</Button>
-        <Button design="Transparent" icon="restart" onClick={onStart}>Restart</Button>
+        <Button design="Transparent" icon="document-text" disabled={!preview} onClick={showLog}>Log</Button>
+        <Button design="Transparent" icon="restart" disabled={main.running} onClick={onStart}
+          tooltip={preview?.source ? `Restart ${describeSource(preview.source, info, versions).title}` : "Restart"}>Restart</Button>
         <Button design="Transparent" icon="stop" onClick={stop}>Stop</Button>
       </div>
-      {(preview.warnings?.length || 0) > 0 && (
-        <MessageStrip design="Critical" hideCloseButton style={{ marginBottom: ".8rem" }}>
-          The page may not render: {preview.warnings!.length} of its files did not load —{" "}
-          {preview.warnings!.slice(0, 3).join(" · ")}{preview.warnings!.length > 3 ? " …" : ""}. Open the Log for details.
-        </MessageStrip>
-      )}
+      {preview && <Warnings warnings={preview.warnings} />}
       {log && <pre className="ev-log" style={{ marginBottom: ".8rem" }}>{log}</pre>}
-      <DeviceFrame key={frameKey} device={device} src={preview.url} title={preview.entry || preview.url} />
+      {comparing ? (
+        <CompareView base={base} main={main} versions={versions} device={device} onClose={() => base.stop()} />
+      ) : preview && (
+        <DeviceFrame key={frameKey + main.src} device={device} src={main.src} title={main.path || preview.entry || preview.url} />
+      )}
       <div className="ev-muted ev-small" style={{ marginTop: ".6rem" }}>If the preview stays blank, your browser may block third-party cookies — use Open in a new tab.</div>
     </Card>
   );

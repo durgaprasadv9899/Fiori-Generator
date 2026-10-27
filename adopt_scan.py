@@ -1102,10 +1102,219 @@ def analyze(files: Dict[str, str], source: Optional[Dict] = None, src_info: Opti
          "env_vars": envs, "files": len(files), "bytes": src_info.get("bytes", 0),
          "skipped": src_info.get("skipped") or [], "source": source,
          "languages": _languages(files)}
+    a["ui_map"] = ui_map(files, mods)
+    a["screens"] += [{"name": u["screen"], "type": f"Server page {u['url']}", "source": u["files"][0] if u["files"] else "",
+                      "editing": "ai", "module": u["module"]} for u in a["ui_map"] if u["kind"] == "server-page"]
+    a["build_outputs"] = build_outputs(files, mods)
+    a["dependencies"] = dependencies(files, mods)
+    a["folders"] = folders(files)
+    say(f"Mapped {len(a['ui_map'])} page(s) to their source files; {len(a['dependencies'])} dependencies.")
     a["arch"] = architecture(mods, dests, model["source"], envs)
     a["findings"] = findings(files, mods, ctx, dests, src_info)
     a["_ctx"] = {"mta": bool(ctx.get("mta")), "cap_roots": ctx["cap_roots"]}
     return a
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# UI map (every page a user can open → the files that render it), build outputs, dependencies, structure
+# ─────────────────────────────────────────────────────────────────────────────
+_BASENAME_RX = re.compile(r"""basename\s*(?:=\s*\{?\s*|:\s*)["'`](/[^"'`$]*)["'`]""")
+_PY_ROUTE_RX = re.compile(r"^@\w+\.(?:get|route|api_route)\(\s*[\"']([^\"']+)[\"'][^\n]*\n(?:[ \t]*@[^\n]*\n)*[ \t]*(?:async\s+)?def\s+(\w+)[^\n]*\n"
+                          r"((?:[ \t]+[^\n]*\n|[ \t]*\n)*)", re.M)
+_PY_TEMPLATE_RX = re.compile(r"(?:render_template|TemplateResponse|render)\(\s*(?:request\s*,\s*)?(?:name\s*=\s*)?[\"']([^\"']+\.html?)[\"']")
+_NODE_RENDER_RX = re.compile(r"\.(?:get|all)\(\s*[\"'`]([^\"'`]+)[\"'`][\s\S]{0,600}?\.render\(\s*[\"'`]([^\"'`]+)[\"'`]")
+_TPL_DEPS_RX = re.compile(r"""\{%-?\s*(?:extends|include|import|from)\s+["']([^"']+)["']""")
+_TPL_ASSET_RX = re.compile(r"""url_for\(\s*['"]static['"]\s*,\s*(?:filename|path)\s*=\s*['"]([^'"]+)['"]|(?:href|src)\s*=\s*["'](/?static/[^"'?#{]+)""")
+
+
+def _find_file(files: Dict[str, str], suffix: str, prefer: str = "") -> str:
+    hits = [p for p in files if p == suffix or p.endswith("/" + suffix)]
+    hits.sort(key=lambda p: (0 if p.startswith(prefer) else 1, len(p)))
+    return hits[0] if hits else ""
+
+
+def _template_files(files: Dict[str, str], name: str, root: str, seen: Optional[set] = None) -> List[str]:
+    """A server template, the templates it extends / includes and the static CSS / JS it loads."""
+    seen = seen if seen is not None else set()
+    p = _find_file(files, "templates/" + name, root) or _find_file(files, "views/" + name, root) or _find_file(files, name, root)
+    if not p or p in seen:
+        return []
+    seen.add(p)
+    out = [p]
+    text = files.get(p) or ""
+    for dep in _TPL_DEPS_RX.findall(text):
+        out += _template_files(files, dep, root, seen)
+    for a, b in _TPL_ASSET_RX.findall(text):
+        asset = a or b.lstrip("/").split("static/", 1)[-1]
+        f = _find_file(files, "static/" + asset, root)
+        if f and f not in seen and not re.search(r"/(dist|build)/", f):
+            seen.add(f)
+            out.append(f)
+    return out
+
+
+def _component_file(files: Dict[str, str], root: str, name: str) -> str:
+    rx = re.compile(r"(?:function|class|const|let)\s+" + re.escape(name) + r"\b")
+    for p, t in _text(files, root, (".tsx", ".jsx", ".vue", ".ts", ".js")):
+        if "/node_modules/" not in "/" + p and rx.search(t):
+            return p
+    return ""
+
+
+def ui_map(files: Dict[str, str], mods: List[Dict]) -> List[Dict]:
+    out: List[Dict] = []
+    for m in mods:
+        root, kind = m["path"], m["kind"]
+        if kind in ("react", "vue", "angular"):
+            base = ""
+            src = root + "src/" if any(p.startswith(root + "src/") for p in files) else root
+            for _, t in _text(files, src, (".tsx", ".jsx", ".ts", ".js", ".vue")):
+                mb = _BASENAME_RX.search(t)
+                if mb and mb.group(1) != "/":
+                    base = mb.group(1).rstrip("/")
+                    break
+            routes = m.get("screens") or []
+            for s in routes:
+                path = re.sub(r"^(Route|Page)\s+", "", s["type"])
+                comp = _component_file(files, root, s["name"])
+                out.append({"url": (base + "/" + path.lstrip("/")) if path.strip("/") else (base + "/"), "screen": s["name"],
+                            "kind": "spa-route", "module": m["name"], "files": [f for f in dict.fromkeys([comp, s["source"]]) if f]})
+            if not routes:
+                app = next((root + f for f in ("src/App.tsx", "src/App.jsx", "src/App.vue", "src/app/app.component.html",
+                                               "src/app/app.component.ts", "src/main.tsx", "src/main.ts") if root + f in files), "")
+                out.append({"url": base + "/", "screen": m["name"], "kind": "spa-route", "module": m["name"],
+                            "files": [app] if app else []})
+        elif kind == "python":
+            for p, t in _text(files, root, (".py",)):
+                for route, fn, body in _PY_ROUTE_RX.findall(t):
+                    for tpl in _PY_TEMPLATE_RX.findall(body):
+                        out.append({"url": route, "screen": fn.replace("_", " ").strip().capitalize(), "kind": "server-page",
+                                    "module": m["name"], "files": _template_files(files, tpl, root) + [p]})
+            urls = {}                                          # Django: urls.py path("x/", views.fn)
+            for p, t in _text(files, root, ("urls.py",)):
+                for u, fn in re.findall(r"path\(\s*r?[\"']([^\"']*)[\"']\s*,\s*(?:\w+\.)*(\w+)", t):
+                    urls.setdefault(fn, "/" + u)
+            if urls:
+                for p, t in _text(files, root, ("views.py",)):
+                    for fn, body in re.findall(r"^def (\w+)\(request[^\n]*\n((?:[ \t]+[^\n]*\n|[ \t]*\n)*)", t, re.M):
+                        for tpl in _PY_TEMPLATE_RX.findall(body):
+                            out.append({"url": urls.get(fn, ""), "screen": fn.replace("_", " ").capitalize(), "kind": "server-page",
+                                        "module": m["name"], "files": _template_files(files, tpl, root) + [p]})
+        elif kind == "node-api":
+            for p, t in _text(files, root, (".js", ".ts", ".mjs")):
+                if "/node_modules/" in "/" + p:
+                    continue
+                for route, view in _NODE_RENDER_RX.findall(t):
+                    tpl = next((f for f in (view + e for e in ("", ".ejs", ".pug", ".hbs", ".html", ".njk"))
+                                if _find_file(files, "views/" + f, root)), view)
+                    out.append({"url": route, "screen": view.split("/")[-1].capitalize(), "kind": "server-page",
+                                "module": m["name"], "files": _template_files(files, tpl, root) + [p]})
+        elif kind in ("ui5", "fe", "ovp"):
+            web = root + "webapp/"
+            idx = web + "index.html" if web + "index.html" in files else root + "index.html" if root + "index.html" in files else ""
+            files_ = [f for f in (m.get("manifest") or "", idx) if f]
+            files_ += sorted(p for p in files if p.startswith(web) and p.endswith((".view.xml", ".controller.js", ".controller.ts", ".fragment.xml")))[:12]
+            out.append({"url": "", "screen": m["name"], "kind": "ui5-app", "module": m["name"], "files": files_,
+                        "pages": [s["name"] for s in (m.get("screens") or [])][:12]})
+        elif kind == "static":
+            out.append({"url": "/", "screen": m["name"], "kind": "static-page", "module": m["name"],
+                        "files": sorted(p for p in files if p.startswith(root) and p.endswith((".html", ".css", ".js")))[:12]})
+    seen, uniq = set(), []
+    for e in out:
+        k = (e["url"], e["screen"], e["module"])
+        if k not in seen:
+            seen.add(k)
+            uniq.append(e)
+    return uniq[:150]
+
+
+def build_outputs(files: Dict[str, str], mods: List[Dict]) -> List[Dict]:
+    """Where each web module's build goes, and whether that built bundle is committed to the repository."""
+    out = []
+    for m in mods:
+        if m["kind"] not in ("react", "vue", "angular"):
+            continue
+        root = m["path"]
+        pkg = _json(files, root + "package.json")
+        script = (pkg.get("scripts") or {}).get("build", "")
+        dirs = [x.group(1) or x.group(2) for x in re.finditer(r"--out-?[dD]ir[= ]+([^\s&;]+)|BUILD_PATH=([^\s&;]+)", script)]
+        for name in ("vite.config.ts", "vite.config.js", "vite.config.mjs", "vite.config.mts", "vue.config.js"):
+            t = files.get(root + name) or ""
+            dirs += re.findall(r"(?:outDir|outputDir)\s*:\s*['\"`]([^'\"`]+)", t)
+            dirs += re.findall(r"(?:outDir|outputDir)\s*:\s*(?:path\.)?(?:resolve|join)\([^)]*?['\"`]([^'\"`]+)['\"`]\s*\)", t)
+        ang = _json(files, root + "angular.json")
+        for proj in (ang.get("projects") or {}).values():
+            op = (((proj.get("architect") or {}).get("build") or {}).get("options") or {}).get("outputPath")
+            op = op.get("base") if isinstance(op, dict) else op
+            if op:
+                dirs.append(op)
+        if not dirs:
+            dirs = ["build" if "react-scripts" in _deps(pkg) else "dist"]
+        d = posixpath.normpath(posixpath.join(root or ".", dirs[0])).lstrip("./") if not dirs[0].startswith("/") else dirs[0].lstrip("/")
+        d = "" if d in (".", "") else d
+        n = sum(1 for p in files if d and p.startswith(d + "/"))
+        # built into another module's folder (e.g. frontend/ → static/dist served by the backend): the bundle is part
+        # of what gets deployed (a Python / Java buildpack does not build JavaScript), so it is kept and rebuilt like
+        # a committed one — the intake may have left the stale copy out
+        served = bool(d) and bool(root) and not (d + "/").startswith(root)
+        out.append({"module": m["name"], "module_path": root, "out_dir": d, "committed": n > 0 or served,
+                    "served_by_backend": served, "files": n})
+    return out
+
+
+def dependencies(files: Dict[str, str], mods: List[Dict]) -> List[Dict]:
+    def owner(path: str) -> str:
+        best = max((m for m in mods if path.startswith(m["path"])), key=lambda m: len(m["path"]), default=None)
+        return best["name"] if best else (_dir(path).strip("/") or "root")
+    out = []
+    for p in sorted(files):
+        if "node_modules/" in p:
+            continue
+        if p.endswith("package.json"):
+            pkg = _json(files, p)
+            for dev, key in ((False, "dependencies"), (True, "devDependencies")):
+                for n, v in sorted((pkg.get(key) or {}).items()):
+                    out.append({"module": owner(p), "name": n, "version": str(v), "dev": dev, "ecosystem": "npm"})
+        elif p.endswith("requirements.txt"):
+            for line in (files[p] or "").splitlines():
+                line = line.split("#")[0].strip()
+                mm = re.match(r"([A-Za-z0-9_.\-\[\]]+)\s*([=<>!~].*)?$", line)
+                if mm and not line.startswith("-"):
+                    out.append({"module": owner(p), "name": mm.group(1), "version": (mm.group(2) or "").strip(), "dev": False,
+                                "ecosystem": "pip"})
+    return out[:600]
+
+
+def folders(files: Dict[str, str]) -> List[Dict]:
+    agg: Dict[str, List[int]] = {}
+    for p, c in files.items():
+        top = p.split("/")[0] + "/" if "/" in p else "(root files)"
+        a = agg.setdefault(top, [0, 0])
+        a[0] += 1
+        if not adopt_files.is_binary(c):
+            a[1] += c.count("\n") + 1
+    return [{"path": k, "files": v[0], "lines": v[1]} for k, v in sorted(agg.items(), key=lambda kv: -kv[1][0])][:40]
+
+
+def enrich(files: Dict[str, str], a: Dict) -> Dict:
+    """The analysis with the parts derived purely from the files (UI map, build outputs, dependencies, structure)
+    computed from these files — current for every version, also for analyses saved before they existed."""
+    if a.get("_enriched"):
+        return a
+    try:
+        mods, _ = detect_modules(files)
+    except Exception:  # noqa: BLE001
+        return a
+    out = dict(a, _enriched=True)
+    out["ui_map"] = ui_map(files, mods)
+    out["build_outputs"] = build_outputs(files, mods)
+    out["dependencies"] = dependencies(files, mods)
+    out["folders"] = folders(files)
+    if not any(str(s.get("type", "")).startswith("Server page") for s in out.get("screens") or []):
+        out["screens"] = list(out.get("screens") or []) + [
+            {"name": u["screen"], "type": f"Server page {u['url']}", "source": u["files"][0] if u["files"] else "",
+             "editing": "ai", "module": u["module"]} for u in out["ui_map"] if u["kind"] == "server-page"]
+    return out
 
 
 def _languages(files: Dict[str, str]) -> Dict[str, int]:
@@ -1183,6 +1392,15 @@ def overview_text(a: Dict) -> str:
         lines.append("Endpoints: " + ", ".join(f"{e['method']} {e['path']}" for e in a["endpoints"][:30]))
     if a["destinations"]:
         lines.append("Destinations: " + ", ".join(d["name"] for d in a["destinations"]))
+    if a.get("ui_map"):
+        lines.append("UI MAP (page URL → files that render it; change THESE files to change what the user sees):")
+        for u in a["ui_map"][:40]:
+            lines.append(f"- {u['url'] or '(app)'} {u['screen']} [{u['kind']}, {u['module']}]: " + ", ".join(u["files"][:6]))
+    for b in a.get("build_outputs") or []:
+        if b["committed"]:
+            lines.append(f"BUILT OUTPUT: {b['module']} builds into {b['out_dir']}/, which is COMMITTED and served as-is. "
+                         f"Never edit files in {b['out_dir']}/ by hand — change the sources in {b['module_path'] or '/'}; "
+                         "the studio rebuilds the bundle after your change.")
     return "\n".join(lines)
 
 

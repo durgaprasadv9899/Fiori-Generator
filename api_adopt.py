@@ -36,6 +36,7 @@ _UPLOADS: Dict[str, Dict] = {}
 _ANALYSES: Dict[str, Dict] = {}
 _PREVIEWS: Dict[str, Dict] = {}          # preview_id -> {owner, project_id, started}
 _CONVERSE: Dict[str, Any] = {}
+_ENRICHED: Dict[str, Dict] = {}          # version_id -> analysis completed with the UI map (older adoptions)
 _LOCK = threading.Lock()
 _HEALTH: Dict[str, Any] = {"at": 0, "value": None}
 
@@ -116,6 +117,9 @@ def register(app, h: Dict[str, Any]) -> None:
 
     def checks_fn(analysis, brief):
         return lambda files, say: adopt_client.run_job("checks", files, {"analysis": analysis, "brief": brief}, say)
+
+    def rebuild_fn(files, outputs, say):
+        return adopt_client.run_job("rebuild", files, {"outputs": outputs}, say, timeout=1800)
 
     def mission_or_404(mid: str, user) -> Dict:
         m = adopt_robot.get(mid)
@@ -238,6 +242,10 @@ def register(app, h: Dict[str, Any]) -> None:
     def adopt_project(pid: str, user: User = Depends(current_user)):
         v = adopted_version(pid, user)
         s, analysis, brief = snap(v)
+        if v["id"] not in _ENRICHED:                   # pages / build outputs / dependencies for older analyses
+            _ENRICHED.clear() if len(_ENRICHED) > 50 else None
+            _ENRICHED[v["id"]] = adopt_scan.enrich(v["files"], analysis)
+        analysis = _ENRICHED[v["id"]]
         meta = {k: v.get(k) for k in ("id", "number", "label", "author", "created_at", "file_count")}
         q = adopt_scan.questions(v["files"], analysis, s.get("source") or {})
         answers = _answers_from_brief(brief)
@@ -315,7 +323,7 @@ def register(app, h: Dict[str, Any]) -> None:
         s, analysis, brief = snap(v)
         return adopt_robot.public(adopt_robot.run(m, v["files"], analysis, brief, history(s), conv,
                                                   checks_fn(analysis, brief), say,
-                                                  terminal=adopt_client.Session(v["files"])))
+                                                  terminal=adopt_client.Session(v["files"]), rebuild_fn=rebuild_fn))
 
     @app.post("/api/jobs/robot-run")
     def job_robot_run(body: Dict = Body(...), user: User = Depends(current_user)):
@@ -336,7 +344,7 @@ def register(app, h: Dict[str, Any]) -> None:
         s, analysis, brief = snap(v)
         return adopt_robot.public(adopt_robot.revise(m, feedback, v["files"], analysis, brief, history(s), conv,
                                                      checks_fn(analysis, brief), say,
-                                                     terminal=adopt_client.Session(v["files"])))
+                                                     terminal=adopt_client.Session(v["files"]), rebuild_fn=rebuild_fn))
 
     @app.post("/api/jobs/robot-revise")
     def job_robot_revise(body: Dict = Body(...), user: User = Depends(current_user)):
@@ -443,34 +451,42 @@ def register(app, h: Dict[str, Any]) -> None:
         return _start(user, "robot-suggest", "AI: suggesting improvements", _w_suggest, user, pid)
 
     # ── preview ────────────────────────────────────────────────────────────
-    def _w_preview(say, u, files, analysis, brief, pid):
+    def _w_preview(say, u, files, analysis, brief, pid, source, slot):
         r = adopt_client.run_job("preview", files, {"analysis": analysis, "brief": brief}, say, timeout=1800)
-        _PREVIEWS[r["preview_id"]] = {"owner": u.id, "project_id": pid, "started": time.time()}
+        _PREVIEWS[r["preview_id"]] = {"owner": u.id, "project_id": pid, "started": time.time(), "slot": slot}
         say("Preview is running.")
-        return {"preview_id": r["preview_id"], "url": adopt_client.preview_url(r), "kind": r.get("kind"),
-                "entry": r.get("entry"), "services": r.get("services") or [], "warnings": r.get("warnings") or []}
+        return {"preview_id": r["preview_id"], "url": adopt_client.preview_url(r, slot), "kind": r.get("kind"),
+                "entry": r.get("entry"), "services": r.get("services") or [], "warnings": r.get("warnings") or [],
+                "source": source, "slot": slot}
 
     @app.post("/api/jobs/adopt-preview")
     def job_adopt_preview(body: Dict = Body(...), user: User = Depends(current_user)):
         mid = _body_str(body, "mission_id")
+        slot = "base" if _body_str(body, "slot") == "base" else "main"
         if mid:
             m = mission_or_404(mid, user)
             v = STORE.get_version(m["version_id"], with_files=True)
             files = adopt_robot.Workspace(v["files"], m.get("_files") or {}).files()
             label = "Preview of the AI change"
+            source = {"kind": "mission", "id": m["id"], "label": m["request"][:160], "version_id": m["version_id"],
+                      "status": m["status"]}
         else:
             v = _version_or_404(_body_str(body, "version_id"), user)
             v = STORE.get_version(v["id"], with_files=True)
             files = v["files"]
             label = f"Preview of version {v['number']}"
+            latest = STORE.latest_version(v["project_id"], with_files=False) or {}
+            source = {"kind": "version", "id": v["id"], "label": f"version {v['number']}", "number": v["number"],
+                      "latest": latest.get("id") == v["id"]}
         s, analysis, brief = snap(v)
         if s.get("app_mode") != "adopted":
             raise HTTPException(400, "Preview of adopted projects only — generated apps use Try it in the studio.")
-        for k, p in list(_PREVIEWS.items()):          # one running preview per user
-            if p["owner"] == user.id:
+        for k, p in list(_PREVIEWS.items()):          # one running preview per user and slot (main / base for compare)
+            if p["owner"] == user.id and p.get("slot", "main") == slot:
                 adopt_client.stop_preview(k)
                 _PREVIEWS.pop(k, None)
-        return _start(user, "adopt-preview", label, _w_preview, user, files, analysis, brief, v["project_id"])
+        return _start(user, "adopt-preview" if slot == "main" else "adopt-preview-base", label, _w_preview, user, files,
+                      analysis, brief, v["project_id"], source, slot)
 
     def _preview_or_404(pvid: str, user) -> Dict:
         p = _PREVIEWS.get(pvid)

@@ -178,6 +178,25 @@ def preview_log(pid: str) -> str:
         return f"(log not available: {e})"
 
 
-def preview_url(result: Dict) -> str:
+def compare_base() -> str:
+    """A second address of the runner for the 'before' preview of a side-by-side compare: the runner picks the
+    preview from a cookie per host, so two previews open at once need two hosts (RUNNER_COMPARE_URL, else the
+    runner host with '-compare' added to its first label; locally 127.0.0.1 next to localhost)."""
+    if os.environ.get("RUNNER_COMPARE_URL"):
+        return os.environ["RUNNER_COMPARE_URL"].rstrip("/")
+    from urllib.parse import urlsplit
+    u = urlsplit(public_base())
+    host = u.hostname or ""
+    if host == "localhost":
+        alt = "127.0.0.1"
+    elif host in ("127.0.0.1", "::1"):
+        alt = "localhost"
+    else:
+        first, _, rest = host.partition(".")
+        alt = f"{first}-compare.{rest}" if rest else host
+    return f"{u.scheme}://{alt}" + (f":{u.port}" if u.port else "")
+
+
+def preview_url(result: Dict, slot: str = "main") -> str:
     entry = (result.get("entry") or "/").lstrip("/")
-    return f"{public_base()}/p/{result['token']}/{entry}"
+    return f"{compare_base() if slot == 'base' else public_base()}/p/{result['token']}/{entry}"
