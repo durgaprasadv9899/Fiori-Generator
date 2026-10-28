@@ -45,7 +45,9 @@ export function usePreviewSlot(pid: string, slot: Slot) {
   };
   /** The URL the frame shows: the entry, or a page of the app the user picked. */
   const src = preview ? (path ? previewOrigin(preview.url) + path : preview.url) : "";
-  return { preview, set, err, job, running: job.running, start, stop, src, path, setPath: setPathState };
+  /** What the slot shows — or, while it starts, what it is starting. */
+  const source: PreviewSource | undefined = job.running ? (ss.get<PreviewSource | null>(pendKey, null) || undefined) : preview?.source;
+  return { preview, set, err, job, running: job.running, start, stop, src, path, setPath: setPathState, source };
 }
 export type PreviewSlot = ReturnType<typeof usePreviewSlot>;
 
@@ -139,9 +141,9 @@ export function StartingPanel({ messages, compact }: { messages: string[]; compa
 export function CompareView({ base, main, versions, device, onClose }: {
   base: PreviewSlot; main: PreviewSlot; versions: VersionMeta[]; device: Device; onClose: () => void;
 }) {
-  const bsrc = base.preview?.source;
+  const bsrc = base.source;
   const bn = bsrc ? (bsrc.number ?? versions.find((v) => v.id === bsrc.id)?.number) : undefined;
-  const msrc = main.preview?.source;
+  const msrc = main.source;
   const mn = msrc?.kind === "version" ? (msrc.number ?? versions.find((v) => v.id === msrc.id)?.number) : undefined;
   const side = (label: string, tone: "neutral" | "brand", s: PreviewSlot) => (
     <div className="ev-cmp__side">
