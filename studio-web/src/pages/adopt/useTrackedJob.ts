@@ -29,6 +29,14 @@ export function useTrackedJob<R = any>(key: string, onDone: (result: R, job: Job
     remember("");
   }, [job?.status, job?.id]); // eslint-disable-line
 
+  useEffect(() => {                      // started by an instance that has since unmounted: pick its job up
+    if (id) return;
+    const t = setInterval(() => {
+      try { const v = sessionStorage.getItem(skey); if (v) setId(v); } catch { /* storage unavailable */ }
+    }, 1000);
+    return () => clearInterval(t);
+  }, [id, skey]);
+
   const tracked = !!job;
   useEffect(() => {                      // a job the provider does not follow (reload, lost poll): follow it here
     if (!id || tracked) return;

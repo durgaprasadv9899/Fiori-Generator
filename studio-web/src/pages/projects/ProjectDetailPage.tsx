@@ -144,7 +144,8 @@ export default function ProjectDetailPage() {
       </div>
 
       <AnimatePresence mode="wait">
-        <motion.div key={tab} className="ev-tabbody" initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} transition={{ duration: 0.18 }}>
+        {/* the adopted workspace stays mounted across its own tabs: it owns the running previews and AI jobs */}
+        <motion.div key={adopted && ADOPT_KEYS.includes(tab) ? "adopted" : tab} className="ev-tabbody" initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} transition={{ duration: 0.18 }}>
           {adopted && ADOPT_KEYS.includes(tab) && (
             <AdoptedWorkspace pid={pid} tab={tab} setTab={setTab} versions={data.versions} mayEdit={may("project.edit")} mayDeploy={mayDeploy}
               onChanged={() => reload(true)} deployVid={deployVid} setDeployVid={setDeployVid} />
