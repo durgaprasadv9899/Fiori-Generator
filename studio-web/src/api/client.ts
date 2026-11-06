@@ -1,5 +1,8 @@
 // Thin fetch wrapper for the studio API. Relative URLs: the approuter (BTP) or studio_api.py
 // (local) serves the UI and /api from the same origin; the approuter adds the user's token.
+/** Fired on window when an API call fails because the workspace database is unreachable. */
+export const STORE_DOWN_EVENT = "evoke:store-down";
+
 export class ApiError extends Error {
   status: number;
   constructor(status: number, message: string) {
@@ -21,6 +24,8 @@ async function request<T>(method: string, path: string, body?: unknown, raw = fa
     try {
       const j = await res.json();
       if (j && j.detail) msg = typeof j.detail === "string" ? j.detail : JSON.stringify(j.detail);
+      // workspace database (SAP HANA Cloud) stopped: tell the shell banner right away
+      if (j && j.code === "store_unavailable") window.dispatchEvent(new CustomEvent(STORE_DOWN_EVENT, { detail: j }));
     } catch { /* not JSON */ }
     if (res.status === 401) msg = msg || "Your session expired — reload the page to sign in again.";
     throw new ApiError(res.status, msg);

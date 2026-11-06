@@ -12,11 +12,35 @@ import { JobsMenu, NotificationsMenu, ProfileMenu, ThemeToggle } from "../compon
 import { ToastProvider } from "../components/shell/Toasts";
 import { useApi } from "../components/shell/useApi";
 import { NoRolePage } from "../components/shell/Access";
+import { StoreBanner, StoreStatusProvider, useStoreHealth } from "../components/shell/StoreStatus";
 import "../components/shell/shell.css";
 
 interface NavItem { path: string; text: string; icon: string; badge?: number; group?: string; perm?: string[] }
 
 export function AppShell() {
+  const { me } = useMe();
+  return (
+    <StoreStatusProvider initial={me?.store.health}>
+      <Shell />
+    </StoreStatusProvider>
+  );
+}
+
+/** Workspace label at the foot of the navigation; turns red while the database is offline. */
+function StoreFoot() {
+  const { me } = useMe();
+  const { health } = useStoreHealth();
+  const hana = me?.store.kind === "hana";
+  const down = health ? !health.ok : false;
+  return (
+    <div className={"ev-nav__foot" + (down ? " is-down" : "")} title={down ? health?.message : undefined}>
+      <Icon name={down ? "disconnected" : hana ? "database" : "save"} />
+      <span>{down ? "SAP HANA Cloud offline" : hana ? "SAP HANA Cloud workspace" : "Local workspace"}</span>
+    </div>
+  );
+}
+
+function Shell() {
   const { me, dark, can } = useMe();
   const loc = useLocation();
   const nav = useNavigate();
@@ -106,13 +130,11 @@ export function AppShell() {
             })}
             <div className="ev-nav__spacer" />
             {!collapsed && (
-              <div className="ev-nav__foot">
-                <Icon name={me?.store.kind === "hana" ? "database" : "save"} />
-                <span>{me?.store.kind === "hana" ? "SAP HANA Cloud workspace" : "Local workspace"}</span>
-              </div>
+              <StoreFoot />
             )}
           </motion.nav>
           <main className="ev-main">
+            <StoreBanner />
             <AnimatePresence mode="wait">
               <motion.div key={loc.pathname.split("/")[1] || "home"} className="ev-page"
                 initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }}

@@ -256,3 +256,12 @@ kbd { font-family: var(--sapFontFamily); font-size: .7rem; padding: .08rem .38re
 .ev-cfsign ol { margin: 0; padding-left: 1.2rem; display: grid; gap: .25rem; font-size: .86rem; color: var(--sapTextColor); }
 .ev-tabs-wrap.is-stuck::before { content: ""; position: absolute; left: -2px; right: -2px; top: -0.8rem; height: calc(0.8rem + 12px); z-index: -1;
   background: var(--sapBackgroundColor); }
+
+/* ── workspace database (SAP HANA Cloud) offline / back banner ───────── */
+.ev-store-banner { display: flex; align-items: flex-start; gap: .5rem; margin: 0 0 1rem; }
+.ev-store-banner ui5-message-strip { flex: 1; }
+.ev-store-banner__since { color: var(--sapContent_LabelColor); }
+.ev-store-banner__detail { margin-top: .35rem; font-size: .75rem; color: var(--sapContent_LabelColor); word-break: break-word; }
+.ev-store-banner__detail summary { cursor: pointer; }
+.ev-nav__foot.is-down { color: var(--sapNegativeTextColor); }
+.ev-nav__foot.is-down ui5-icon { color: var(--sapNegativeColor); }

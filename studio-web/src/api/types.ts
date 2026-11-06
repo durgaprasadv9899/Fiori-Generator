@@ -1,9 +1,10 @@
 // Shared API types (see docs/studio-api-v2.md for the full contract).
 export interface User { id: string; name: string; roles: string[]; source: string }
+export interface StoreHealth { kind: "hana" | "sqlite"; ok: boolean; message: string; detail: string; checked_at: number; since: number }
 export interface Me {
   user: User;
   ai: { available: boolean; model: string | null; error?: string };
-  store: { kind: "hana" | "sqlite"; durable: boolean; note: string };
+  store: { kind: "hana" | "sqlite"; durable: boolean; note: string; health?: StoreHealth };
   permissions?: string[];
 }
 export type JobStatus = "running" | "done" | "error";

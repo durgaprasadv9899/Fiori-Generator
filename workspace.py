@@ -134,6 +134,10 @@ class Store:
         with self._conn() as c:
             c.executescript(_SCHEMA)
 
+    def health(self, max_age: float = 15.0) -> Dict[str, Any]:
+        """State of the workspace database (local SQLite file: always reachable)."""
+        return {"kind": "sqlite", "ok": True, "message": "", "detail": "", "checked_at": time.time(), "since": 0}
+
     # ── plumbing ────────────────────────────────────────────────────────────
     def _conn(self) -> sqlite3.Connection:
         c = sqlite3.connect(self.path, timeout=30, isolation_level=None)
@@ -799,9 +803,18 @@ class _HanaCursor:
         return iter(self.fetchall())
 
 
+class StoreUnavailable(RuntimeError):
+    """The workspace database cannot be reached (e.g. the SAP HANA Cloud instance is stopped)."""
+
+    def __init__(self, message: str, detail: str = ""):
+        super().__init__(message)
+        self.detail = detail
+
+
 class _HanaConn:
-    def __init__(self, conn):
+    def __init__(self, conn, on_lost=None):
         self._c = conn
+        self._on_lost = on_lost
 
     def execute(self, sql: str, params=()):
         s = sql.strip().upper()
@@ -813,9 +826,15 @@ class _HanaConn:
         if s == "ROLLBACK":
             self._c.rollback()
             return _HanaCursor(self._c.cursor())
-        cur = self._c.cursor()
         params = [bytes(p) if isinstance(p, (memoryview, bytearray)) else p for p in (params or ())]
-        cur.execute(_hana_sql(sql), params)
+        try:
+            cur = self._c.cursor()
+            cur.execute(_hana_sql(sql), params)
+        except Exception as e:  # noqa: BLE001 — connection lost mid-call (instance stopping) -> readable
+            if _HANA_CONN_ERR.search(str(e)) and self._on_lost:
+                self._on_lost(str(e)[:300])
+                raise StoreUnavailable(HANA_DOWN_MESSAGE, detail=str(e)[:300]) from e
+            raise
         return _HanaCursor(cur)
 
     def close(self):
@@ -825,9 +844,22 @@ class _HanaConn:
             pass
 
 
+HANA_DOWN_MESSAGE = ("SAP HANA Cloud is not reachable — the database instance is probably stopped (the free tier "
+                     "stops it automatically). Start it in SAP HANA Cloud Central; the studio reconnects by itself "
+                     "within a minute. Nothing can be saved until then.")
+# hdbcli error text that means "no connection" (as opposed to an SQL error in a statement)
+_HANA_CONN_ERR = __import__("re").compile(
+    r"-10709|-10807|-10108|-10821|connect|connection|socket|timed? ?out|unreachable|refused|"
+    r"name or service|getaddrinfo|instance is (starting|stopped|stopping)|not available|SSL", __import__("re").I)
+
+
 class HanaStore(Store):
     """The same store on SAP HANA Cloud: a `hana` service instance of plan `schema` bound to the studio.
-    Tables are created in the instance's schema on first start; data survives restarts and redeploys."""
+    Tables are created in the instance's schema on first connect; data survives restarts and redeploys.
+
+    The instance can be stopped at any time (free tier: nightly). The store never gives up on it:
+    every call opens a fresh connection; when that fails it raises StoreUnavailable (API -> 503 with a
+    readable message) and `health()` reports the state, so the UI can show a banner."""
 
     def __init__(self, creds: Dict):
         from hdbcli import dbapi           # SAP HANA client (pip: hdbcli)
@@ -835,44 +867,94 @@ class HanaStore(Store):
         self._creds = creds
         self.path = f"hana://{creds.get('host')}:{creds.get('port')}/{creds.get('schema')}"
         self._lock = threading.RLock()
+        self._ready = False                # tables checked/created
+        self._state_lock = threading.Lock()
+        self._health: Dict[str, Any] = {"ok": None, "checked_at": 0.0, "error": "", "since": time.time()}
         self.durable = True
         self.durability_note = ""
-        c = self._raw()
         try:
-            cur = c.cursor()
-            cur.execute("SELECT TABLE_NAME FROM SYS.TABLES WHERE SCHEMA_NAME=CURRENT_SCHEMA")
-            have = {r[0] for r in cur.fetchall()}
-            for t, cols in _HANA_DDL.items():
-                if t not in have:
-                    cur.execute(f"CREATE COLUMN TABLE {t} ({cols})")
-            c.commit()
-        finally:
-            c.close()
+            self._raw().close()            # connect now if possible; a stopped instance is fine (reported)
+        except StoreUnavailable:
+            pass
+
+    def _ensure_tables(self, c) -> None:
+        cur = c.cursor()
+        cur.execute("SELECT TABLE_NAME FROM SYS.TABLES WHERE SCHEMA_NAME=CURRENT_SCHEMA")
+        have = {r[0] for r in cur.fetchall()}
+        for t, cols in _HANA_DDL.items():
+            if t not in have:
+                cur.execute(f"CREATE COLUMN TABLE {t} ({cols})")
+        c.commit()
+
+    def _mark(self, ok: bool, error: str = "") -> None:
+        with self._state_lock:
+            h = self._health
+            if h["ok"] is not ok:
+                h["since"] = time.time()
+            h.update(ok=ok, error=error, checked_at=time.time())
 
     def _raw(self):
         cr = self._creds
-        conn = self._dbapi.connect(address=cr["host"], port=int(cr["port"]), user=cr["user"],
-                                   password=cr["password"], encrypt=True,
-                                   sslValidateCertificate=True, currentSchema=cr.get("schema") or None)
-        conn.setautocommit(True)
+        try:
+            conn = self._dbapi.connect(address=cr["host"], port=int(cr["port"]), user=cr["user"],
+                                       password=cr["password"], encrypt=True, sslValidateCertificate=True,
+                                       currentSchema=cr.get("schema") or None,
+                                       connectTimeout=int(os.environ.get("HANA_CONNECT_TIMEOUT_MS", "8000")))
+            conn.setautocommit(True)
+            if not self._ready:
+                with self._lock:
+                    if not self._ready:
+                        self._ensure_tables(conn)
+                        conn.setautocommit(True)
+                        self._ready = True
+        except self._dbapi.Error as e:
+            self._mark(False, str(e)[:300])
+            raise StoreUnavailable(HANA_DOWN_MESSAGE, detail=str(e)[:300]) from e
+        self._mark(True)
         return conn
 
+    def health(self, max_age: float = 15.0) -> Dict[str, Any]:
+        """Live state of the HANA connection (pings when the last result is older than max_age seconds)."""
+        if time.time() - self._health["checked_at"] > max_age:
+            try:
+                c = self._raw()
+                try:
+                    c.cursor().execute("SELECT 1 FROM DUMMY")
+                finally:
+                    c.close()
+            except StoreUnavailable:
+                pass
+            except Exception as e:  # noqa: BLE001 — anything else: still report, never raise
+                self._mark(False, str(e)[:300])
+        h = dict(self._health)
+        return {"kind": "hana", "ok": bool(h["ok"]), "message": "" if h["ok"] else HANA_DOWN_MESSAGE,
+                "detail": h["error"], "checked_at": h["checked_at"], "since": h["since"]}
+
     def _conn(self):
-        return _Closing(_HanaConn(self._raw()))
+        return _Closing(_HanaConn(self._raw(), lambda err: self._mark(False, err)))
 
     @contextlib.contextmanager
     def _tx(self):
         with self._lock:
             raw = self._raw()
             raw.setautocommit(False)
-            c = _HanaConn(raw)
+            c = _HanaConn(raw, lambda err: self._mark(False, err))
             try:
                 try:
                     yield c
                 except BaseException:
-                    raw.rollback()
+                    try:
+                        raw.rollback()
+                    except Exception:  # noqa: BLE001 — connection already gone: keep the original error
+                        pass
                     raise
-                raw.commit()
+                try:
+                    raw.commit()
+                except self._dbapi.Error as e:
+                    if _HANA_CONN_ERR.search(str(e)):
+                        self._mark(False, str(e)[:300])
+                        raise StoreUnavailable(HANA_DOWN_MESSAGE, detail=str(e)[:300]) from e
+                    raise
             finally:
                 c.close()
 
@@ -910,10 +992,18 @@ def get_store() -> Store:
         if _STORE is None:
             creds = _vcap_hana()
             if creds:
+                # On Cloud Foundry a bound HANA instance is THE workspace: if it is stopped, keep it and
+                # report it (StoreUnavailable / health()) — never fall back to the container's disk, which
+                # would show an empty workspace and lose everything saved there at the next restart.
+                # Locally (HANA_CREDENTIALS) an unreachable instance still falls back to SQLite.
+                strict = bool(os.environ.get("VCAP_APPLICATION")) or os.environ.get("STUDIO_STORE_STRICT") == "1"
                 try:
-                    _STORE = HanaStore(creds)
-                    return _STORE
-                except Exception as e:  # noqa: BLE001 — keep the studio usable, say why
+                    hs = HanaStore(creds)
+                    if strict or hs._ready:
+                        _STORE = hs
+                        return _STORE
+                    STORE_NOTE = f"SAP HANA workspace unavailable ({hs._health['error'][:200]}) — using local storage."
+                except Exception as e:  # noqa: BLE001 — e.g. hdbcli missing: keep the studio usable, say why
                     STORE_NOTE = f"SAP HANA workspace unavailable ({str(e)[:200]}) — using local storage."
             elif os.environ.get("DATABASE_URL"):
                 STORE_NOTE = ("DATABASE_URL is set but managed-database storage is not enabled yet — "

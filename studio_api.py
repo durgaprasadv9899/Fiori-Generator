@@ -90,6 +90,12 @@ def _require(user, perm, project=None):
         raise HTTPException(403, str(e))
 
 
+@app.exception_handler(wsp.StoreUnavailable)
+async def _store_down(request: Request, exc: wsp.StoreUnavailable):  # HANA stopped -> 503 the UI understands
+    return JSONResponse(status_code=503, content={"detail": str(exc), "code": "store_unavailable",
+                                                  "cause": exc.detail})
+
+
 @app.exception_handler(Exception)
 async def _unhandled(request: Request, exc: Exception):        # readable errors for the UI
     return JSONResponse(status_code=500, content={"detail": f"{type(exc).__name__}: {exc}"})
@@ -108,8 +114,14 @@ def me(user: ac.User = Depends(current_user)):
     return {"user": {"id": user.id, "name": user.display, "roles": sorted(user.roles), "source": user.source},
             "ai": {"available": bool(fn), "model": model, "error": _AI["error"]},
             "store": {"kind": "hana" if isinstance(STORE, wsp.HanaStore) else "sqlite", "durable": STORE.durable,
-                      "note": STORE.durability_note or wsp.STORE_NOTE},
+                      "note": STORE.durability_note or wsp.STORE_NOTE, "health": STORE.health(max_age=60)},
             "permissions": sorted(ac.permissions(user)), "auth_mode": ac.auth_mode()}
+
+
+@app.get("/api/health/store")
+def store_health(fresh: int = 0, user: ac.User = Depends(current_user)):
+    """Live state of the workspace database — polled by the UI to show a banner when HANA is stopped."""
+    return STORE.health(max_age=0 if fresh else 15.0)
 
 
 SAP_EXAMPLES = {
