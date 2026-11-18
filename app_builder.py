@@ -173,9 +173,14 @@ _TR_CACHE: Dict = {}
 # ─────────────────────────────────────────────────────────────────────────────
 # Deployment + local dev files
 # ─────────────────────────────────────────────────────────────────────────────
-def _ui5_yaml(ctx: RenderContext, destination: str) -> str:
+def _ui5_yaml(ctx: RenderContext, destination: str, destination_path: str = "") -> str:
     prefix = "/" + ctx.service_path.strip("/").split("/")[0]
-    dest = f"\n        destination: {destination}" if destination else ""
+    dest = f"\n            destination: {destination}" if destination else ""
+    dp = (destination_path or "").rstrip("/")
+    if destination and dp:
+        # the destination URL already ends in the service path: forward only what follows it
+        prefix = dp
+        dest += "\n            pathReplace: /"
     # (multi-service apps: all services of one backend share the /sap prefix)
     return f"""# Local development against the real backend (BAS or local machine).
 #   In BAS the destination below is used directly.
@@ -198,7 +203,7 @@ server:
 
 
 def _spec(ctx: RenderContext, *, app_title: str, auth_type: str, use_existing_destination: bool,
-          destination_name: str, on_premise: bool, theme: str) -> AppSpec:
+          destination_name: str, on_premise: bool, theme: str, destination_path: str = "") -> AppSpec:
     import multi_service as ms
     main = ctx.bp["main"]
     svc = ODataService(
@@ -206,7 +211,7 @@ def _spec(ctx: RenderContext, *, app_title: str, auth_type: str, use_existing_de
         entity_set=main["entity_set"], key_field=main["key"][0] if main["key"] else "",
         title_field=main["title_field"], fields=[c["field"] for c in main["columns"]],
         auth_type=auth_type, is_primary=True, use_existing_destination=use_existing_destination,
-        destination=destination_name.strip(), on_premise=on_premise)
+        destination=destination_name.strip(), on_premise=on_premise, dest_path=destination_path)
     services = [svc]
     # further services of a multi-service app: same backend destination, own approuter route
     for s in ms.services(ctx.model)[1:]:
@@ -216,7 +221,7 @@ def _spec(ctx: RenderContext, *, app_title: str, auth_type: str, use_existing_de
             odata_version=ctx.model["odata_version"], entity_set=es0["name"] if es0 else "",
             key_field=(es0["keys"][0] if es0 and es0["keys"] else ""), title_field="",
             auth_type=auth_type, use_existing_destination=use_existing_destination,
-            destination=destination_name.strip(), on_premise=on_premise))
+            destination=destination_name.strip(), on_premise=on_premise, dest_path=destination_path))
     return AppSpec(user_prompt=ctx.bp["app"]["description"], app_id=ctx.app_id, app_name=app_title,
                    odata_url=ctx.service_path, entity_set=main["entity_set"],
                    key_field=svc.key_field, title_field=main["title_field"], theme=theme,
@@ -241,7 +246,7 @@ def build(*, edmx: str, requirement: str, app_id: str, service_url: str,
           ai_fn: Optional[Callable] = None, blueprint: Optional[Dict] = None,
           floorplan: str = "", auth_type: str = AUTH_NONE,
           use_existing_destination: bool = False, destination_name: str = "",
-          on_premise: bool = False, theme: str = "sap_horizon",
+          on_premise: bool = False, theme: str = "sap_horizon", destination_path: str = "",
           translate_texts: bool = True, style: Optional[Dict] = None,
           logo_data_uri: str = "", design_spec: Optional[Dict] = None,
           coverage: Optional[List] = None, extra_services: Optional[List[Dict]] = None,
@@ -320,14 +325,16 @@ def build(*, edmx: str, requirement: str, app_id: str, service_url: str,
         files["ui5-mock.yaml"] = _mock_yaml_multi(ctx, extra_info)
         for n in model.get("merge_notes") or []:
             notes.append(n)
-    files["ui5.yaml"] = _ui5_yaml(ctx, destination_name if use_existing_destination else "")
+    files["ui5.yaml"] = _ui5_yaml(ctx, destination_name if use_existing_destination else "",
+                                  destination_path if use_existing_destination else "")
     files["package.json"] = package_json(ctx)
     files["README.md"] = readme(ctx)
 
     # BTP deployment (approuter + XSUAA + destination [+ connectivity])
     spec = _spec(ctx, app_title=bp["app"]["title"], auth_type=auth_type,
                  use_existing_destination=use_existing_destination,
-                 destination_name=destination_name, on_premise=on_premise, theme=theme)
+                 destination_name=destination_name, on_premise=on_premise, theme=theme,
+                 destination_path=destination_path if use_existing_destination else "")
     files["mta.yaml"] = _make_mta_yaml_hardcoded(spec)
     files["xs-app.json"] = _make_root_xs_app_json_hardcoded(spec)
     files.update(_make_auth_config_files(spec))

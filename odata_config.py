@@ -90,6 +90,10 @@ class ODataService:
     # service bound to the approuter, regardless of who created the
     # destination. Set this when the destination's ProxyType is OnPremise.
     on_premise: bool = False
+    # Path part of the destination's URL when it already points below the host (e.g. a
+    # destination made for one service: http://host:8090/sap/opu/odata/sap/API_SALES_ORDER_SRV).
+    # The approuter appends a route's target to the destination URL, so targets drop this part.
+    dest_path: str = ""
 
     # ── derived helpers ──────────────────────────────────────────────────────
     def dest_name(self) -> str:
@@ -242,10 +246,12 @@ def xs_app_routes(services: List[ODataService]) -> List[Dict]:
         if prefix in seen:
             continue
         seen.add(prefix)
+        dp = (s.dest_path or "").rstrip("/")
+        target = prefix[len(dp):] if dp and (prefix == dp or prefix.startswith(dp + "/")) else prefix
         routes.append({
             # Distinct full-path source so multiple backends don't collide.
             "source": f"^{prefix}/(.*)$",
-            "target": f"{prefix}/$1",
+            "target": f"{target}/$1",
             "destination": s.dest_name(),
             # xsuaa => user must log in; the approuter then attaches the token /
             # does principal propagation per the destination config.

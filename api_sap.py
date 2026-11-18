@@ -106,6 +106,17 @@ def _with_backend(dest: str, call):
         raise SapError(str(e))
 
 
+def destination_path(dest: str) -> str:
+    """Path part of a destination's URL ("" when host-only or unknown). Generated apps need it:
+    the approuter appends a route's target to the destination URL."""
+    if not dest:
+        return ""
+    try:
+        return _backend(dest).base_path.rstrip("/")
+    except SapError:
+        return ""
+
+
 def services(dest: str) -> Dict:
     if not dest:
         raise SapError("Choose a destination.")

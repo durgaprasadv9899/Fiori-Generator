@@ -306,12 +306,22 @@ class Backend:
     headers: Dict[str, str] = field(default_factory=dict, repr=False)
     proxies: Optional[Dict[str, str]] = field(default=None, repr=False)
     timeout: Tuple[int, int] = (10, 90)        # (connect, read) seconds
+    # Path part of the destination URL ("" for a host-only destination). A destination may point
+    # straight at one service (…/sap/opu/odata/sap/API_SALES_ORDER_SRV); base_url then already
+    # contains that path, so server-absolute paths under it are sent relative to it.
+    base_path: str = ""
+
+    def service_scoped(self) -> bool:
+        return is_service_path(self.base_path)
 
     def get(self, path: str, params: Optional[Dict] = None,
             accept: str = "application/json") -> requests.Response:
         params = dict(params or {})
         if self.sap_client:
             params.setdefault("sap-client", self.sap_client)
+        bp = self.base_path.rstrip("/")
+        if bp and (path == bp or path.startswith(bp + "/")):
+            path = path[len(bp):] or "/"
         url = self.base_url.rstrip("/") + "/" + path.lstrip("/")
         try:
             return requests.get(url, params=params, proxies=self.proxies,
@@ -324,6 +334,16 @@ class Backend:
                                   f"'{self.name}' is down or not reachable from here.")
         except requests.exceptions.RequestException as e:
             raise DiscoveryError(f"Could not reach '{self.name}' ({self.transport}): {e}")
+
+
+def is_service_path(path: str) -> bool:
+    """True when a URL path names an OData service (not just a host or a Gateway root)."""
+    segs = [s for s in (path or "").strip("/").split("/") if s]
+    return any(s.lower() in ("odata", "odata4") for s in segs) and len(segs) >= 3
+
+
+def url_path(url: str) -> str:
+    return urllib.parse.urlsplit(url or "").path.rstrip("/")
 
 
 class HostUnreachable(DiscoveryError):
@@ -377,7 +397,7 @@ def open_backend(client: DestinationClient, dest_name: str,
     on_prem = proxy_type.lower() == "onpremise"
     common = dict(name=dest_name, proxy_type=proxy_type,
                   authentication=cfg.get("Authentication", ""),
-                  sap_client=cfg.get("sap-client", ""))
+                  sap_client=cfg.get("sap-client", ""), base_path=url_path(url))
 
     if env == "bas":
         # BAS proxy injects auth + tunnels to on-prem; requests picks up the
@@ -428,6 +448,16 @@ def list_services(backend: Backend) -> Tuple[List[Dict], List[str]]:
     """
     services: List[Dict] = []
     warnings: List[str] = []
+
+    if backend.service_scoped():
+        # The destination points at one service — the Gateway catalog lives elsewhere on the
+        # host (and the destination's user may not be allowed to read it), so offer that service.
+        path = backend.base_path.rstrip("/") + "/"
+        segs = [s for s in path.strip("/").split("/") if s]
+        v4 = any(s.lower() == "odata4" for s in segs)
+        name = segs[-2] if v4 and len(segs) >= 2 and segs[-1].isdigit() else segs[-1]
+        return [{"name": name, "title": f"Service of destination '{backend.name}'",
+                 "version": "", "odata_version": "4.0" if v4 else "2.0", "path": path}], []
 
     try:
         r = backend.get(V2_CATALOG, {

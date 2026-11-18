@@ -956,6 +956,25 @@ def preview(body: Dict = Body(...), user: ac.User = Depends(current_user)):
 # ─────────────────────────────────────────────────────────────────────────────
 # Generate / validate
 # ─────────────────────────────────────────────────────────────────────────────
+def _destination_path(r: Dict) -> str:
+    """Path part of the reused destination's URL ("" for a host-only one). A destination made
+    for one service can only serve that service — refuse others before generating."""
+    dest = r.get("destination") or {}
+    name = (dest.get("name") or "").strip()
+    if r.get("mode") == "standalone" or not (dest.get("use_existing") and name):
+        return ""
+    import api_sap
+    dp = api_sap.destination_path(name)
+    if dp:
+        urls = [r.get("service_url") or ""] + [e.get("service_url", "") for e in (r.get("extra") or [])]
+        outside = [u for u in urls if u and not ("/" + u.strip("/") + "/").startswith(dp + "/")]
+        if outside:
+            raise HTTPException(400, f"Destination '{name}' points at one service ({dp}), so the app can only call "
+                                     f"that service — not {', '.join(outside)}. Choose a destination that points at "
+                                     "the SAP system itself (e.g. EvokeSD4).")
+    return dp
+
+
 def _w_generate(say, user, body, r, fn):
     import app_builder as ab
     from odata_config import AUTH_NONE
@@ -979,6 +998,7 @@ def _w_generate(say, user, body, r, fn):
         dest = r["destination"]
         use_existing = bool(dest.get("use_existing"))
         app_id = _body_str(body, "app_id") or "com.mycompany.app"
+        dest_path = r.get("dest_path", "")
         say("Rendering views, controllers, custom logic and configuration…")
         langs = (bp.get("app") or {}).get("languages") or []
         if fn and len(langs) > 1:
@@ -986,7 +1006,8 @@ def _w_generate(say, user, body, r, fn):
         res = ab.build(edmx=r["edmx"], requirement=requirement, app_id=app_id, service_url=r["service_url"], ai_fn=fn,
                        blueprint=bp, auth_type=(dest.get("auth_type") or AUTH_NONE) if not use_existing else AUTH_NONE,
                        use_existing_destination=use_existing, destination_name=(dest.get("name") or "").strip(),
-                       on_premise=bool(dest.get("on_premise")), theme=theme, design_spec=design.get("spec"),
+                       on_premise=bool(dest.get("on_premise")), theme=theme, destination_path=dest_path,
+                       design_spec=design.get("spec"),
                        coverage=design.get("coverage"), extra_services=r["extra"] or None)
         snap_src = {"app_mode": "sap", "md_edmx": r["edmx"], "md_service_url_val": r["service_url"],
                     "md_extra": [dict(e, sets=0) for e in r["extra"]], "md_use_existing_dest": use_existing,
@@ -1037,6 +1058,7 @@ def job_generate(body: Dict = Body(...), user: ac.User = Depends(current_user)):
     import re
     if app_id and not re.match(r"^[a-zA-Z]\w*(\.[a-zA-Z]\w*)+$", app_id):
         raise HTTPException(400, f"App ID '{app_id}' must be a dotted namespace like com.company.app.")
+    r["dest_path"] = _destination_path(r)
     fn, _ = _ai()
     return _start(user, "generate", "Generating the application", _w_generate, user, body, r, fn)
 
