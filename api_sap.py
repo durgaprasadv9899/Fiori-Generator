@@ -8,13 +8,18 @@ from __future__ import annotations
 
 import os
 import threading
+import time
 from typing import Dict, List, Optional
 
 import btp_discovery as bd
 
 _LOCK = threading.Lock()
 _CLIENT: Dict[str, object] = {}          # one destination client per process (token cached inside)
-_BACKENDS: Dict[str, object] = {}
+_BACKENDS: Dict[str, tuple] = {}       # dest -> (backend, opened_at)
+# A Backend carries tokens (Connectivity proxy, destination OAuth) that expire — ~12 h for the
+# proxy token. Caching it for the process lifetime made every catalog call fail once the API had
+# been up longer than that, so connections are reopened after BACKEND_TTL and after any failure.
+BACKEND_TTL = 600
 
 
 class SapError(Exception):
@@ -70,27 +75,41 @@ def destinations() -> Dict:
     return {"destinations": sorted(out, key=lambda d: d["name"].lower()), "source": source}
 
 
-def _backend(dest: str):
+def _backend(dest: str, fresh: bool = False):
     with _LOCK:
-        if dest in _BACKENDS:
-            return _BACKENDS[dest]
+        hit = _BACKENDS.get(dest)
+        if hit and not fresh and time.time() - hit[1] < BACKEND_TTL:
+            return hit[0]
+        _BACKENDS.pop(dest, None)
     client, _ = _client()
     try:
         be = bd.open_backend(client, dest, bd.runtime_environment())
     except bd.DiscoveryError as e:
         raise SapError(str(e))
     with _LOCK:
-        _BACKENDS[dest] = be
+        _BACKENDS[dest] = (be, time.time())
     return be
+
+
+def _with_backend(dest: str, call):
+    """call(backend); on failure (other than a down host) retry once over a freshly opened
+    connection, so an expired token never sticks."""
+    try:
+        return call(_backend(dest))
+    except bd.HostUnreachable as e:
+        raise SapError(str(e))
+    except bd.DiscoveryError:
+        pass
+    try:
+        return call(_backend(dest, fresh=True))
+    except bd.DiscoveryError as e:
+        raise SapError(str(e))
 
 
 def services(dest: str) -> Dict:
     if not dest:
         raise SapError("Choose a destination.")
-    try:
-        svcs, warns = bd.list_services(_backend(dest))
-    except bd.DiscoveryError as e:
-        raise SapError(str(e))
+    svcs, warns = _with_backend(dest, bd.list_services)
     return {"services": [{"path": s.get("path", ""), "name": s.get("name", ""), "title": s.get("title", ""),
                           "odata_version": s.get("odata_version", "")} for s in svcs], "warnings": warns}
 
@@ -121,10 +140,7 @@ def metadata(body: Dict) -> Dict:
         dest, path = (body.get("destination") or "").strip(), (body.get("path") or "").strip()
         if not (dest and path):
             raise SapError("Paste the $metadata XML, or choose a destination and a service.")
-        try:
-            edmx = bd.fetch_metadata(_backend(dest), path)
-        except bd.DiscoveryError as e:
-            raise SapError(str(e))
+        edmx = _with_backend(dest, lambda be: bd.fetch_metadata(be, path))
         service_url = service_url or path
     if not service_url:
         raise SapError("Enter the service path the deployed app will call (e.g. /sap/opu/odata/sap/API_SALES_ORDER_SRV/).")
